@@ -27,28 +27,10 @@ if ( ! defined( 'ABSPATH' ) ) {
     $cpic_counts = cpic()->queue->get_status_counts();
     $cpic_tpl_total = count( CPIC_Template_Manager::get_templates() );
     $cpic_mappings  = count( cpic()->category_mapper->get_mappings() );
-    $cpic_engines   = CPIC_Renderer::text_engine_report();
     ?>
     <div class="cpic-section">
-        <h2><?php esc_html_e( 'Bangla Text Engine Status', 'custom-post-image-creator' ); ?></h2>
-        <div class="cpic-row cpic-stats">
-            <div class="cpic-card cpic-stat">
-                <span class="cpic-stat-num"><?php echo esc_html( $cpic_engines['exec'] ? '✓' : '✗' ); ?></span>
-                <span class="cpic-stat-label">PHP exec()</span>
-            </div>
-            <div class="cpic-card cpic-stat">
-                <span class="cpic-stat-num"><?php echo esc_html( $cpic_engines['python'] ? '✓' : '✗' ); ?></span>
-                <span class="cpic-stat-label">python3 (<?php echo esc_html( $cpic_engines['python'] ?: 'n/a' ); ?>)</span>
-            </div>
-            <div class="cpic-card cpic-stat">
-                <span class="cpic-stat-num"><?php echo esc_html( $cpic_engines['pango_python'] ? '✓' : '✗' ); ?></span>
-                <span class="cpic-stat-label">Pango (python)</span>
-            </div>
-            <div class="cpic-card cpic-stat">
-                <span class="cpic-stat-num"><?php echo esc_html( $cpic_engines['im_pango'] ? '✓' : '✗' ); ?></span>
-                <span class="cpic-stat-label">IM pango delegate</span>
-            </div>
-        </div>
+        <h2><?php esc_html_e( 'Bengali Renderer', 'custom-post-image-creator' ); ?></h2>
+        <p class="cpic-preview-hint"><?php esc_html_e( 'Unicode Bengali text is rendered by the browser Canvas engine with bundled fonts. Pango, Python, HarfBuzz, Imagick, and a server-side headless browser are not required. Open/save posts in the WordPress editor so the browser can capture the image before WP-Cron publishes it.', 'custom-post-image-creator' ); ?></p>
     </div>
 
     <!-- Automation stats -->
@@ -253,7 +235,7 @@ if ( ! defined( 'ABSPATH' ) ) {
             <img id="cpic-server-preview" src="" alt="<?php esc_attr_e( 'Template preview', 'custom-post-image-creator' ); ?>" style="display:none;max-width:100%;height:auto;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.35);" />
             <p id="cpic-preview-info" class="cpic-preview-hint" style="display:none;"></p>
         </div>
-        <p class="cpic-preview-hint"><?php esc_html_e( 'Select a post to preview the photocard its category template will produce (server-side render, identical to automatic output).', 'custom-post-image-creator' ); ?></p>
+        <p class="cpic-preview-hint"><?php esc_html_e( 'Select a post to render and save the canonical Bengali photocard in this browser. The same PNG is reused for publishing and automation.', 'custom-post-image-creator' ); ?></p>
     </div>
 
     <!-- ============================================================ -->

@@ -1,5 +1,5 @@
 /**
- * Custom Post Image Creator v6.4.0 – Main JS
+ * Custom Post Image Creator v6.5.0 – Main JS
  *
  * Handles:
  *   - Post loading, filtering, sorting, pagination
@@ -141,34 +141,24 @@
 
     var serverPreviewUrl = '';
 
-    /**
-     * Render the production photocard for a post server-side (template
-     * resolved by category) and show it in the preview area.
-     */
+    /** Render and persist the exact browser PNG later reused by shares and jobs. */
     function previewPostServer(postId) {
         postId = parseInt(postId, 10) || 0;
-        if (!postId) { return; }
-
+        if (!postId || !window.cpicRenderPost) { return; }
         var post = posts.find(function (p) { return p.id === postId; });
         if (post) { selectedPost = post; }
-
-        var $img    = $('#cpic-server-preview');
-        var $info   = $('#cpic-preview-info');
-
+        var $img = $('#cpic-server-preview');
+        var $info = $('#cpic-preview-info');
         serverPreviewUrl = '';
         $img.hide();
-        $info.show().text(i18n.processing || 'Rendering template preview…');
-
-        cpicAjax('cpic_preview_post', { post_id: postId }, function (d) {
-            serverPreviewUrl = d.url;
-            $img.attr('src', d.url + '?t=' + Date.now()).show();
-            var t = d.typography || {};
-            var headline = (t.elements || []).find(function (item) { return item.element === 'headline'; }) || t;
-            var info = (d.template_name || 'Template') + (d.text_mode ? ' — text: ' + d.text_mode : '') + (headline.final_size ? ' — headline ' + headline.final_size + 'px, ' + headline.line_count + ' lines (' + headline.engine + ')' : '');
-            $info.text(info).show();
-        }, function (msg) {
-            $info.text('Template preview failed: ' + msg).show();
-            logStatus('Template preview failed: ' + msg, 'error');
+        $info.show().text(i18n.processing || 'Rendering Bengali text in your browser…');
+        window.cpicRenderPost(postId).then(function (result) {
+            serverPreviewUrl = result.url;
+            $img.attr('src', result.url + '?t=' + Date.now()).show();
+            $info.text((result.template_name || 'Template') + ' — ' + result.renderer + ' — canonical PNG saved').show();
+        }).catch(function (error) {
+            $info.text('Template preview failed: ' + error.message).show();
+            logStatus('Template preview failed: ' + error.message, 'error');
         });
     }
 
@@ -222,7 +212,7 @@
        ============================================================ */
     function downloadPreview() {
         if (!serverPreviewUrl) {
-            logStatus('Select a post and wait for its server-rendered preview before downloading.', 'error');
+            logStatus('Select a post and wait for its browser-rendered preview before downloading.', 'error');
             return;
         }
         var a = document.createElement('a');
@@ -245,8 +235,10 @@
     }
 
     function sendServerShareRequest(action, postId, onSuccess, onError) {
-        // Backend always regenerates from the active category template; do not upload a browser canvas.
-        cpicAjax(action, { post_id: postId }, onSuccess, onError);
+        if (!window.cpicRenderPost) { if (onError) onError('Browser Canvas renderer is unavailable.'); return; }
+        window.cpicRenderPost(postId).then(function () {
+            cpicAjax(action, { post_id: postId }, onSuccess, onError);
+        }).catch(function (error) { if (onError) onError(error.message); });
     }
 
     function shareToFacebook(postId) {
@@ -553,6 +545,7 @@
         logStatus:          logStatus,
         loadPosts:          function () { loadPosts(currentPage); },
         ajax:               cpicAjax,
+        renderPost:         function (postId) { return window.cpicRenderPost(postId); },
         escHtml:            escHtml
     };
 

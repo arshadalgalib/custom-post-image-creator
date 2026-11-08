@@ -85,22 +85,36 @@ class CPIC_Publisher {
             return $this->handle_failure( $job_id, __( 'No active template found.', 'custom-post-image-creator' ) );
         }
 
-        /* ── Stage 2: Generate photocard ──────────────── */
-        if ( empty( $job['image_path'] ) || ! file_exists( $job['image_path'] ) ) {
-            $queue->update( $job_id, array( 'status' => 'processing' ) );
-            $img = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
-
-            if ( is_wp_error( $img ) ) {
-                CPIC_Logger::log( 'imagick', __( 'Generation failed.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'error' => $img->get_error_message() ) );
-                return $this->handle_failure( $job_id, $img->get_error_message() );
+        /* ── Stage 2: Consume the browser-created canonical PNG ── */
+        if ( empty( $job['image_path'] ) || ! is_file( $job['image_path'] ) ) {
+            $artifact = CPIC_Canvas_Artifacts::current_for_post( $post_id );
+            if ( is_wp_error( $artifact ) ) {
+                $wait_since = (int) get_post_meta( $post_id, '_cpic_render_wait_since', true );
+                if ( ! $wait_since ) {
+                    $wait_since = time();
+                    update_post_meta( $post_id, '_cpic_render_wait_since', $wait_since );
+                }
+                if ( time() - $wait_since < 900 ) {
+                    $queue->update( $job_id, array(
+                        'status' => 'pending',
+                        'last_error' => __( 'Waiting for the WordPress editor browser to upload the rendered PNG.', 'custom-post-image-creator' ),
+                        'next_attempt_at' => time() + 60,
+                    ) );
+                    return false;
+                }
+                return $this->handle_failure( $job_id, $artifact->get_error_message(), true );
             }
-
             $queue->update( $job_id, array(
-                'image_path' => $img['path'],
-                'image_url'  => $img['url'],
-                'status'     => 'generated',
+                'template_id' => $artifact['template_id'],
+                'image_path' => $artifact['path'],
+                'image_url' => $artifact['url'],
+                'renderer_id' => $artifact['renderer'],
+                'input_hash' => $artifact['input_hash'],
+                'template_hash' => $artifact['template_hash'],
+                'rendered_at' => current_time( 'mysql' ),
+                'status' => 'generated',
             ) );
-            CPIC_Logger::log( 'queue', __( 'Photocard generated.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'post_id' => $post_id, 'image_url' => $img['url'] ) );
+            CPIC_Logger::log( 'queue', __( 'Reused browser-rendered canonical PNG.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'post_id' => $post_id, 'renderer' => $artifact['renderer'] ) );
             $job = $queue->get_job( $job_id );
         }
 

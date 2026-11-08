@@ -1,9 +1,9 @@
 <?php
 /**
- * Server-side image generation using Imagick.
+ * Compatibility facade for canonical browser-generated artifacts.
  *
- * Generates a 1080×1080 (or custom size) photocard layering:
- *   Background → Featured Image → Title → Date → Logo → Caption
+ * PHP validates/reuses the PNG captured by Canvas 2D; it does not render a
+ * second image or require a server-side text-shaping stack.
  *
  * @package CustomPostImageCreator
  */
@@ -47,9 +47,10 @@ class CPIC_Image_Generator {
     /* ─── Template-driven generation ──────────────────── */
 
     /**
-     * Generate a photocard from a template config.
+     * Return the current browser-generated photocard for a post.
      *
-     * Conceptually: generate( $post_id, $template_config ).
+     * The config parameter remains for backward-compatible call signatures; PHP
+     * intentionally never creates a replacement renderer output.
      *
      * @param int   $post_id         Post ID.
      * @param array $template_config Template configuration array.
@@ -61,7 +62,7 @@ class CPIC_Image_Generator {
     }
 
     /**
-     * Generate a preview photocard from a template config using sample data.
+     * Reject synchronous PHP preview requests; previews are rendered by Canvas in the browser.
      *
      * @param array $template_config Template configuration array.
      * @param array $data            Optional preview data overrides.

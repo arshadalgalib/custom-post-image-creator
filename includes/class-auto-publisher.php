@@ -4,7 +4,8 @@
  *
  * New work is owned exclusively by CPIC_Automation + CPIC_Queue. Keeping the
  * class name avoids breaking code that asks for the old singleton property,
- * but it never registers a second worker or accepts browser canvas uploads.
+ * but it never registers a second worker. Canonical PNG capture is handled by
+ * CPIC_Canvas_Artifacts through the post-scoped admin renderer endpoint.
  *
  * @package CustomPostImageCreator
  */
@@ -38,10 +39,10 @@ class CPIC_Auto_Publisher {
         return cpic()->automation->process_due_jobs( 25 );
     }
 
-    /** Legacy canvas capture is intentionally disabled; generated cards are server-authoritative. */
+    /** Retire the pre-6.5 upload action; use the post-scoped Canvas artifact endpoint. */
     public function ajax_store_auto_image() {
         cpic()->security->verify_ajax_request();
-        wp_send_json_error( array( 'message' => __( 'Browser-captured images are no longer accepted. The canonical server renderer generates publishing images.', 'custom-post-image-creator' ) ), 410 );
+        wp_send_json_error( array( 'message' => __( 'This legacy upload action is retired. Open/save the post editor or render it in the dashboard to create its canonical Canvas PNG.', 'custom-post-image-creator' ) ), 410 );
     }
 
     /** Read current persistent-queue status for compatibility callers. */

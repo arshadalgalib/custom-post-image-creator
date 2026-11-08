@@ -113,6 +113,10 @@ class CPIC_Installer {
             status VARCHAR(20) NOT NULL DEFAULT 'pending',
             image_path TEXT,
             image_url TEXT,
+            renderer_id VARCHAR(50) NOT NULL DEFAULT '',
+            input_hash VARCHAR(64) NOT NULL DEFAULT '',
+            template_hash VARCHAR(64) NOT NULL DEFAULT '',
+            rendered_at DATETIME NULL DEFAULT NULL,
             facebook_post_id VARCHAR(191) NOT NULL DEFAULT '',
             facebook_comment_id VARCHAR(191) NOT NULL DEFAULT '',
             telegram_message_id VARCHAR(191) NOT NULL DEFAULT '',
@@ -139,7 +143,9 @@ class CPIC_Installer {
      */
     private static function ensure_upload_dirs() {
         $upload_dir = wp_upload_dir();
-        foreach ( array( 'cpic-temp', 'cpic-generated', 'cpic-previews', 'cpic-fontconfig' ) as $dir ) {
+        // Only the canonical generated-image directory is needed by 6.5+.
+        // Legacy cache/fontconfig folders are left untouched on upgrades.
+        foreach ( array( 'cpic-generated' ) as $dir ) {
             $path = trailingslashit( $upload_dir['basedir'] ) . $dir;
             if ( ! is_dir( $path ) ) {
                 wp_mkdir_p( $path );

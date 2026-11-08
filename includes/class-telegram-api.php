@@ -32,28 +32,12 @@ class CPIC_Telegram_API {
             wp_send_json_error( array( 'message' => __( 'Invalid post or permission denied.', 'custom-post-image-creator' ) ), 403 );
         }
 
-        // Server-side template generation (bypasses client-side canvas).
-        $tpl = cpic()->category_mapper->resolve_template_for_post( $post_id );
-        $generated_path = '';
-
-        if ( $tpl && ! empty( $tpl['config'] ) ) {
-            $img = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
-            if ( ! is_wp_error( $img ) ) {
-                $generated_path = $img['path'];
-            }
+        $artifact = CPIC_Canvas_Artifacts::current_for_post( $post_id );
+        if ( is_wp_error( $artifact ) ) {
+            wp_send_json_error( array( 'message' => $artifact->get_error_message() ) );
         }
-
-        if ( empty( $generated_path ) || ! file_exists( $generated_path ) ) {
-            wp_send_json_error( array( 'message' => __( 'Could not generate photocard image.', 'custom-post-image-creator' ) ) );
-        }
-
-        try {
-            $result = $this->share( $post_id, $generated_path );
-        } finally {
-            if ( $generated_path && file_exists( $generated_path ) ) {
-                cpic()->image_generator->cleanup( $generated_path );
-            }
-        }
+        // Keep the canonical PNG so both social channels and safe retries reuse it.
+        $result = $this->share( $post_id, $artifact['path'] );
 
         if ( is_wp_error( $result ) ) {
             wp_send_json_error( array( 'message' => $result->get_error_message() ) );
@@ -116,18 +100,10 @@ class CPIC_Telegram_API {
             return new WP_Error( 'tg_duplicate', __( 'This post was shared to Telegram less than a minute ago.', 'custom-post-image-creator' ) );
         }
 
-        $generated_path = '';
-        if ( empty( $image_path ) || ! file_exists( $image_path ) ) {
-            $tpl = cpic()->category_mapper->resolve_template_for_post( $post_id );
-            if ( ! $tpl || empty( $tpl['config'] ) ) {
-                return new WP_Error( 'tg_template_missing', __( 'No active template is available for this post.', 'custom-post-image-creator' ) );
-            }
-            $img = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
-            if ( is_wp_error( $img ) ) {
-                return $img;
-            }
-            $image_path     = $img['path'];
-            $generated_path = $img['path'];
+        if ( empty( $image_path ) || ! is_file( $image_path ) ) {
+            $artifact = CPIC_Canvas_Artifacts::current_for_post( $post_id );
+            if ( is_wp_error( $artifact ) ) { return $artifact; }
+            $image_path = $artifact['path'];
         }
 
         // Build caption (max 1024 chars).
@@ -140,14 +116,12 @@ class CPIC_Telegram_API {
         $lock_value = (string) time();
         $existing_lock = get_option( $lock_key, false );
         if ( $existing_lock ) {
-            if ( $generated_path ) { cpic()->image_generator->cleanup( $generated_path ); }
             $message = ( time() - (int) $existing_lock ) > 300
                 ? __( 'A previous Telegram request has an ambiguous outcome. Check the destination before clearing its delivery lock.', 'custom-post-image-creator' )
                 : __( 'A Telegram publication for this post is already in progress.', 'custom-post-image-creator' );
             return new WP_Error( 'tg_busy', $message );
         }
         if ( ! add_option( $lock_key, $lock_value, '', false ) ) {
-            if ( $generated_path ) { cpic()->image_generator->cleanup( $generated_path ); }
             return new WP_Error( 'tg_busy', __( 'A Telegram publication for this post is already in progress.', 'custom-post-image-creator' ) );
         }
 
@@ -168,7 +142,6 @@ class CPIC_Telegram_API {
         $http_code    = (int) curl_getinfo( $ch, CURLINFO_HTTP_CODE );
         curl_close( $ch );
 
-        if ( $generated_path ) { cpic()->image_generator->cleanup( $generated_path ); }
         if ( $curl_error ) {
             // Keep the lock after an ambiguous transport outcome to avoid a duplicate message.
             CPIC_Logger::log( 'telegram', __( 'Telegram transport failed; outcome is ambiguous.', 'custom-post-image-creator' ), array( 'post_id' => (int) $post_id ) );

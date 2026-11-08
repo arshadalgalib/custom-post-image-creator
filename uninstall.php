@@ -78,6 +78,14 @@ foreach ( $cpic_options as $option ) {
 delete_post_meta_by_key( 'cpic_last_shared_to_facebook' );
 delete_post_meta_by_key( 'cpic_last_shared_to_telegram' );
 delete_post_meta_by_key( 'cpic_auto_canvas_image_path' );
+delete_post_meta_by_key( '_cpic_rendered_image_path' );
+delete_post_meta_by_key( '_cpic_rendered_image_url' );
+delete_post_meta_by_key( '_cpic_render_template_hash' );
+delete_post_meta_by_key( '_cpic_render_input_hash' );
+delete_post_meta_by_key( '_cpic_render_renderer' );
+delete_post_meta_by_key( '_cpic_render_artifact_sha256' );
+delete_post_meta_by_key( '_cpic_rendered_at' );
+delete_post_meta_by_key( '_cpic_render_wait_since' );
 delete_post_meta_by_key( 'cpic_telegram_message_id' );
 delete_post_meta_by_key( 'cpic_fb_post_id' );
 delete_post_meta_by_key( 'cpic_fb_pending_media_id' );

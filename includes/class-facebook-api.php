@@ -154,28 +154,12 @@ class CPIC_Facebook_API {
             wp_send_json_error( array( 'message' => __( 'Invalid post or permission denied.', 'custom-post-image-creator' ) ), 403 );
         }
 
-        // Server-side template generation (bypasses client-side canvas).
-        $tpl = cpic()->category_mapper->resolve_template_for_post( $post_id );
-        $generated_path = '';
-
-        if ( $tpl && ! empty( $tpl['config'] ) ) {
-            $img = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
-            if ( ! is_wp_error( $img ) ) {
-                $generated_path = $img['path'];
-            }
+        $artifact = CPIC_Canvas_Artifacts::current_for_post( $post_id );
+        if ( is_wp_error( $artifact ) ) {
+            wp_send_json_error( array( 'message' => $artifact->get_error_message() ) );
         }
-
-        if ( empty( $generated_path ) || ! file_exists( $generated_path ) ) {
-            wp_send_json_error( array( 'message' => __( 'Could not generate photocard image.', 'custom-post-image-creator' ) ) );
-        }
-
-        try {
-            $result = $this->share( $post_id, $generated_path );
-        } finally {
-            if ( $generated_path && file_exists( $generated_path ) ) {
-                cpic()->image_generator->cleanup( $generated_path );
-            }
-        }
+        // Keep the canonical PNG: Telegram, Facebook, retries, and downloads reuse this exact file.
+        $result = $this->share( $post_id, $artifact['path'] );
 
         if ( is_wp_error( $result ) ) {
             wp_send_json_error( array( 'message' => $result->get_error_message() ) );
@@ -494,27 +478,12 @@ class CPIC_Facebook_API {
      * @return array|WP_Error
      */
     public function share( $post_id, $image_path = '', $overrides = array() ) {
-        $generated_path = '';
-        if ( empty( $image_path ) || ! file_exists( $image_path ) ) {
-            // Resolve category-mapped template first.
-            $tpl = cpic()->category_mapper->resolve_template_for_post( $post_id );
-            if ( ! $tpl || empty( $tpl['config'] ) ) {
-                return new WP_Error( 'fb_template_missing', __( 'No active template is available for this post.', 'custom-post-image-creator' ) );
-            }
-            $img = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
-            if ( is_wp_error( $img ) ) {
-                return $img;
-            }
-            $image_path     = $img['path'];
-            $generated_path = $img['path'];
+        if ( empty( $image_path ) || ! is_file( $image_path ) ) {
+            $artifact = CPIC_Canvas_Artifacts::current_for_post( $post_id );
+            if ( is_wp_error( $artifact ) ) { return $artifact; }
+            $image_path = $artifact['path'];
         }
-
         $posted = $this->publish_photo( $post_id, $image_path );
-
-        // Cleanup temp image (only if we generated it).
-        if ( $generated_path ) {
-            cpic()->image_generator->cleanup( $generated_path );
-        }
 
         if ( is_wp_error( $posted ) ) {
             return $posted;

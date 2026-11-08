@@ -36,6 +36,10 @@ class CPIC_Admin_UI {
         add_action( 'wp_ajax_cpic_job_delete', array( $this, 'ajax_job_delete' ) );
         add_action( 'wp_ajax_cpic_job_retry', array( $this, 'ajax_job_retry' ) );
 
+        /* Browser-rendered canonical artifacts */
+        add_action( 'wp_ajax_cpic_render_context', array( $this, 'ajax_render_context' ) );
+        add_action( 'wp_ajax_cpic_store_rendered_image', array( $this, 'ajax_store_rendered_image' ) );
+
         /* Dashboard preview */
         add_action( 'wp_ajax_cpic_preview_post', array( $this, 'ajax_preview_post' ) );
         add_action( 'wp_ajax_cpic_bulk_download', array( $this, 'ajax_bulk_download' ) );
@@ -137,11 +141,14 @@ class CPIC_Admin_UI {
         unset( $safe_settings['cpic_tg_bot_token'] );
         unset( $safe_settings['cpic_tg_chat_id'] );
 
-        // The editor no longer captures and queues a second, legacy card.
-        // CPIC_Automation renders the category-template card server-side and
-        // is the sole owner of the publish lifecycle.
-
         if ( ! $is_dashboard ) {
+            if ( $is_editor ) {
+                $common_data['isEditor'] = true;
+                $common_data['postId'] = isset( $_GET['post'] ) ? absint( $_GET['post'] ) : 0;
+                wp_enqueue_script( 'cpic-canvas-renderer', CPIC_PLUGIN_URL . 'js/canvas-renderer.js', array(), CPIC_VERSION, true );
+                wp_enqueue_script( 'cpic-canvas', CPIC_PLUGIN_URL . 'js/cpic-canvas.js', array( 'jquery', 'cpic-canvas-renderer', 'wp-data' ), CPIC_VERSION, true );
+                wp_localize_script( 'cpic-canvas', 'cpicData', $common_data );
+            }
             return;
         }
 
@@ -189,7 +196,9 @@ class CPIC_Admin_UI {
         if ( 'dashboard' === $tab ) {
             wp_enqueue_media();
             wp_enqueue_script( 'wp-color-picker' );
-            wp_enqueue_script( 'cpic-script', CPIC_PLUGIN_URL . 'js/cpic-script.js', array( 'jquery', 'wp-color-picker' ), CPIC_VERSION, true );
+            wp_enqueue_script( 'cpic-canvas-renderer', CPIC_PLUGIN_URL . 'js/canvas-renderer.js', array(), CPIC_VERSION, true );
+            wp_enqueue_script( 'cpic-canvas', CPIC_PLUGIN_URL . 'js/cpic-canvas.js', array( 'jquery', 'cpic-canvas-renderer' ), CPIC_VERSION, true );
+            wp_enqueue_script( 'cpic-script', CPIC_PLUGIN_URL . 'js/cpic-script.js', array( 'jquery', 'wp-color-picker', 'cpic-canvas' ), CPIC_VERSION, true );
             wp_enqueue_script( 'cpic-bulk', CPIC_PLUGIN_URL . 'js/bulk-processing.js', array( 'cpic-script' ), CPIC_VERSION, true );
             wp_localize_script( 'cpic-script', 'cpicData', $common_data );
             return;
@@ -198,7 +207,9 @@ class CPIC_Admin_UI {
         if ( 'templates' === $tab ) {
             wp_enqueue_media();
             wp_enqueue_script( 'wp-color-picker' );
-            wp_enqueue_script( 'cpic-templates', CPIC_PLUGIN_URL . 'js/templates.js', array( 'jquery', 'wp-color-picker' ), CPIC_VERSION, true );
+            wp_enqueue_script( 'cpic-canvas-renderer', CPIC_PLUGIN_URL . 'js/canvas-renderer.js', array(), CPIC_VERSION, true );
+            wp_enqueue_script( 'cpic-canvas', CPIC_PLUGIN_URL . 'js/cpic-canvas.js', array( 'jquery', 'cpic-canvas-renderer' ), CPIC_VERSION, true );
+            wp_enqueue_script( 'cpic-templates', CPIC_PLUGIN_URL . 'js/templates.js', array( 'jquery', 'wp-color-picker', 'cpic-canvas' ), CPIC_VERSION, true );
 
             $templates = CPIC_Template_Manager::get_templates();
             $template_data = array();
@@ -456,13 +467,13 @@ class CPIC_Admin_UI {
             $data['featured_image'] = esc_url_raw( wp_unslash( $_POST['featured_image'] ) );
         }
 
-        $result = cpic()->image_generator->generate_template_preview( $config, $data );
-
-        if ( is_wp_error( $result ) ) {
-            wp_send_json_error( array( 'message' => $result->get_error_message() ) );
-        }
-
-        wp_send_json_success( array( 'url' => $result['url'], 'text_mode' => CPIC_Renderer::$last_text_mode, 'typography' => CPIC_Renderer::$last_typography ) );
+        wp_send_json_success( array(
+            'config' => $config,
+            'data' => $data,
+            'template_hash' => hash( 'sha256', wp_json_encode( $config ) ),
+            'input_hash' => hash( 'sha256', wp_json_encode( $data ) ),
+            'renderer' => CPIC_Canvas_Artifacts::RENDERER,
+        ) );
     }
 
     /* ─── AJAX: category mappings ─────────────────────────── */
@@ -613,37 +624,59 @@ class CPIC_Admin_UI {
         wp_send_json_success( array( 'message' => __( 'Job deleted.', 'custom-post-image-creator' ) ) );
     }
 
-    /**
-     * Render the photocard a post WOULD get in production: resolve the
-     * template via category mapping and render server-side with the post's
-     * real data. This is exactly what the automatic pipeline produces.
-     */
-    public function ajax_preview_post() {
-        cpic()->security->verify_ajax_request();
+    /** Verify a post-scoped renderer request without requiring administrator-only access. */
+    private function verify_render_request( $post_id ) {
+        if ( ! check_ajax_referer( CPIC_Security::NONCE_ACTION, CPIC_Security::NONCE_FIELD, false ) ) {
+            wp_send_json_error( array( 'message' => __( 'Security check failed.', 'custom-post-image-creator' ) ), 403 );
+        }
+        if ( ! $post_id || ! current_user_can( 'edit_post', $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Permission denied.', 'custom-post-image-creator' ) ), 403 );
+        }
+    }
 
+    /** Return the sanitized template and post data for the canonical browser renderer. */
+    public function ajax_render_context() {
         $post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0;
-        if ( ! $post_id || ! get_post( $post_id ) || ! current_user_can( 'edit_post', $post_id ) ) {
+        $this->verify_render_request( $post_id );
+        if ( ! get_post( $post_id ) ) {
             wp_send_json_error( array( 'message' => __( 'Invalid post or permission denied.', 'custom-post-image-creator' ) ), 403 );
         }
+        $context = CPIC_Canvas_Artifacts::context_for_post( $post_id );
+        if ( is_wp_error( $context ) ) { wp_send_json_error( array( 'message' => $context->get_error_message() ) ); }
+        $existing = CPIC_Canvas_Artifacts::current_for_post( $post_id );
+        if ( ! is_wp_error( $existing ) ) { $context['existing_artifact'] = $existing; }
+        wp_send_json_success( $context );
+    }
 
-        $tpl = cpic()->category_mapper->resolve_template_for_post( $post_id );
-        if ( ! $tpl ) {
-            wp_send_json_error( array( 'message' => __( 'No active template resolved for this post.', 'custom-post-image-creator' ) ) );
+    /** Persist a bounded PNG uploaded by the authenticated browser renderer. */
+    public function ajax_store_rendered_image() {
+        $post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0;
+        $this->verify_render_request( $post_id );
+        if ( ! get_post( $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Invalid post or permission denied.', 'custom-post-image-creator' ) ), 403 );
         }
-
-        $result = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
-
-        if ( is_wp_error( $result ) ) {
-            wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+        if ( empty( $_FILES['image']['tmp_name'] ) || ! isset( $_FILES['image']['error'] ) || UPLOAD_ERR_OK !== (int) $_FILES['image']['error'] ) {
+            wp_send_json_error( array( 'message' => __( 'Browser image upload failed. Check the host upload-size limit and try again.', 'custom-post-image-creator' ) ) );
         }
+        $tmp_file = $_FILES['image']['tmp_name'];
+        if ( ! is_uploaded_file( $tmp_file ) ) { wp_send_json_error( array( 'message' => __( 'Uploaded PNG could not be verified.', 'custom-post-image-creator' ) ) ); }
+        $size = (int) filesize( $tmp_file );
+        if ( $size < 24 || $size > 15 * MB_IN_BYTES ) { wp_send_json_error( array( 'message' => __( 'The PNG must be 15 MB or smaller.', 'custom-post-image-creator' ) ) ); }
+        $bytes = file_get_contents( $tmp_file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+        if ( false === $bytes ) { wp_send_json_error( array( 'message' => __( 'Could not read uploaded PNG.', 'custom-post-image-creator' ) ) ); }
+        $result = CPIC_Canvas_Artifacts::save_for_post(
+            $post_id,
+            $bytes,
+            isset( $_POST['template_hash'] ) ? sanitize_text_field( wp_unslash( $_POST['template_hash'] ) ) : '',
+            isset( $_POST['input_hash'] ) ? sanitize_text_field( wp_unslash( $_POST['input_hash'] ) ) : ''
+        );
+        if ( is_wp_error( $result ) ) { wp_send_json_error( array( 'message' => $result->get_error_message() ) ); }
+        wp_send_json_success( $result );
+    }
 
-        wp_send_json_success( array(
-            'url'           => $result['url'],
-            'template_name' => $tpl['name'],
-            'text_mode'     => CPIC_Renderer::$last_text_mode,
-            'typography'    => CPIC_Renderer::$last_typography,
-            'engines'       => CPIC_Renderer::text_engine_report(),
-        ) );
+    /** Build an unsaved preview; the same browser renderer used for the final PNG. */
+    public function ajax_preview_post() {
+        $this->ajax_render_context();
     }
 
     /** Generate a server-side ZIP from the authoritative renderer. */
@@ -676,38 +709,22 @@ class CPIC_Admin_UI {
             wp_send_json_error( array( 'message' => __( 'Could not create the ZIP archive.', 'custom-post-image-creator' ) ) );
         }
         $failures = array();
-        $generated = array();
         foreach ( $ids as $post_id ) {
             $post = get_post( $post_id );
             if ( ! $post || 'post' !== $post->post_type || 'publish' !== $post->post_status || ! current_user_can( 'edit_post', $post_id ) ) {
                 $failures[] = array( 'post_id' => $post_id, 'message' => __( 'Post unavailable or permission denied.', 'custom-post-image-creator' ) );
                 continue;
             }
-            try {
-                $template = cpic()->category_mapper->resolve_template_for_post( $post_id );
-                if ( ! $template || empty( $template['config'] ) ) {
-                    $failures[] = array( 'post_id' => $post_id, 'message' => __( 'No active template could be resolved.', 'custom-post-image-creator' ) );
-                    continue;
-                }
-                $image = cpic()->image_generator->generate_from_template( $post_id, $template['config'] );
-            } catch ( \Throwable $e ) {
-                CPIC_Logger::log( 'bulk', __( 'Unexpected bulk image generation error.', 'custom-post-image-creator' ), array( 'post_id' => $post_id, 'error' => $e->getMessage() ) );
-                $failures[] = array( 'post_id' => $post_id, 'message' => __( 'Unexpected image generation failure.', 'custom-post-image-creator' ) );
-                continue;
-            }
+            $image = CPIC_Canvas_Artifacts::current_for_post( $post_id );
             if ( is_wp_error( $image ) || empty( $image['path'] ) || ! is_file( $image['path'] ) ) {
-                $failures[] = array( 'post_id' => $post_id, 'message' => is_wp_error( $image ) ? $image->get_error_message() : __( 'Image generation failed.', 'custom-post-image-creator' ) );
+                $failures[] = array( 'post_id' => $post_id, 'message' => is_wp_error( $image ) ? $image->get_error_message() : __( 'Canonical PNG unavailable.', 'custom-post-image-creator' ) );
                 continue;
             }
-            $generated[] = $image['path'];
             if ( ! $zip->addFile( $image['path'], 'cpic-' . $post_id . '.png' ) ) {
                 $failures[] = array( 'post_id' => $post_id, 'message' => __( 'Could not add image to the ZIP archive.', 'custom-post-image-creator' ) );
             }
         }
         $closed = $zip->close();
-        foreach ( $generated as $path ) {
-            cpic()->image_generator->cleanup( $path );
-        }
         if ( ! $closed || ! is_file( $zip_path ) || ! filesize( $zip_path ) ) {
             wp_delete_file( $zip_path );
             wp_send_json_error( array( 'message' => __( 'ZIP creation failed.', 'custom-post-image-creator' ), 'failures' => $failures ) );

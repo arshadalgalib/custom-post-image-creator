@@ -21,75 +21,21 @@ if ( ! defined( 'ABSPATH' ) ) {
 
     <!-- ── STEP 1: Requirements ──────────────────────── -->
     <div class="cpic-guide-card" id="step-1">
-        <h2 class="cpic-guide-step">
-            <span class="cpic-guide-num">1</span>
-            <?php esc_html_e( 'Check Server Requirements', 'custom-post-image-creator' ); ?>
-        </h2>
+        <h2 class="cpic-guide-step"><span class="cpic-guide-num">1</span><?php esc_html_e( 'Check hosting and browser requirements', 'custom-post-image-creator' ); ?></h2>
         <div class="cpic-guide-body">
-            <p><?php esc_html_e( 'Before you begin, make sure your server has the following:', 'custom-post-image-creator' ); ?></p>
-
+            <p><?php esc_html_e( 'The plugin does not require server-side Pango, Python, HarfBuzz, ImageMagick, or Imagick. Bengali text is drawn by Canvas 2D in the WordPress admin browser using bundled Unicode fonts.', 'custom-post-image-creator' ); ?></p>
             <table class="widefat cpic-guide-table">
-                <thead>
-                    <tr>
-                        <th><?php esc_html_e( 'Requirement', 'custom-post-image-creator' ); ?></th>
-                        <th><?php esc_html_e( 'Required', 'custom-post-image-creator' ); ?></th>
-                        <th><?php esc_html_e( 'Status', 'custom-post-image-creator' ); ?></th>
-                    </tr>
-                </thead>
+                <thead><tr><th><?php esc_html_e( 'Capability', 'custom-post-image-creator' ); ?></th><th><?php esc_html_e( 'Needed for', 'custom-post-image-creator' ); ?></th><th><?php esc_html_e( 'Status', 'custom-post-image-creator' ); ?></th></tr></thead>
                 <tbody>
-                    <tr>
-                        <td><strong>PHP 7.4+</strong></td>
-                        <td><?php esc_html_e( 'Yes', 'custom-post-image-creator' ); ?></td>
-                        <td><span class="cpic-status-dot <?php echo version_compare( PHP_VERSION, '7.4', '>=' ) ? 'cpic-ok' : 'cpic-fail'; ?>">
-                            <?php echo esc_html( PHP_VERSION ); ?>
-                        </span></td>
-                    </tr>
-                    <tr>
-                        <td><strong><?php esc_html_e( 'PHP Imagick Extension', 'custom-post-image-creator' ); ?></strong></td>
-                        <td><?php esc_html_e( 'Yes', 'custom-post-image-creator' ); ?></td>
-                        <td><span class="cpic-status-dot <?php echo class_exists( 'Imagick' ) ? 'cpic-ok' : 'cpic-fail'; ?>">
-                            <?php esc_html_e( class_exists( 'Imagick' ) ? 'Loaded ✅' : 'Not installed ❌', 'custom-post-image-creator' ); ?>
-                        </span></td>
-                    </tr>
-                    <tr>
-                        <td><strong><?php esc_html_e( 'PHP exec() function', 'custom-post-image-creator' ); ?></strong></td>
-                        <td><?php esc_html_e( 'Yes', 'custom-post-image-creator' ); ?></td>
-                        <td><span class="cpic-status-dot <?php echo function_exists( 'exec' ) ? 'cpic-ok' : 'cpic-fail'; ?>">
-                            <?php esc_html_e( function_exists( 'exec' ) ? 'Available ✅' : 'Disabled ❌', 'custom-post-image-creator' ); ?>
-                        </span></td>
-                    </tr>
-                    <tr>
-                        <td><strong><?php esc_html_e( 'Python3 (for Bangla text)', 'custom-post-image-creator' ); ?></strong></td>
-                        <td><?php esc_html_e( 'Recommended', 'custom-post-image-creator' ); ?></td>
-                        <td><span class="cpic-status-dot <?php echo (int) @exec( 'which python3 2>/dev/null' ) ? 'cpic-ok' : 'cpic-warn'; ?>">
-                            <?php esc_html_e( (int) @exec( 'which python3 2>/dev/null' ) ? 'Available ✅' : 'Not found ⚠️', 'custom-post-image-creator' ); ?>
-                        </span></td>
-                    </tr>
-                    <tr>
-                        <td><strong><?php esc_html_e( 'ImageMagick CLI (magick)', 'custom-post-image-creator' ); ?></strong></td>
-                        <td><?php esc_html_e( 'Recommended', 'custom-post-image-creator' ); ?></td>
-                        <td><span class="cpic-status-dot <?php echo (int) @exec( 'which magick 2>/dev/null' ) ? 'cpic-ok' : 'cpic-warn'; ?>">
-                            <?php esc_html_e( (int) @exec( 'which magick 2>/dev/null' ) ? 'Available ✅' : 'Not found ⚠️', 'custom-post-image-creator' ); ?>
-                        </span></td>
-                    </tr>
-                    <tr>
-                        <td><strong><?php esc_html_e( 'cURL Extension', 'custom-post-image-creator' ); ?></strong></td>
-                        <td><?php esc_html_e( 'Yes (for Facebook & Telegram)', 'custom-post-image-creator' ); ?></td>
-                        <td><span class="cpic-status-dot <?php echo function_exists( 'curl_init' ) ? 'cpic-ok' : 'cpic-fail'; ?>">
-                            <?php esc_html_e( function_exists( 'curl_init' ) ? 'Loaded ✅' : 'Not installed ❌', 'custom-post-image-creator' ); ?>
-                        </span></td>
-                    </tr>
+                    <tr><td>PHP 7.4+ / WordPress 5.8+</td><td><?php esc_html_e( 'Plugin operation', 'custom-post-image-creator' ); ?></td><td><?php echo esc_html( PHP_VERSION ); ?></td></tr>
+                    <tr><td><?php esc_html_e( 'Admin browser with Canvas 2D and FontFace', 'custom-post-image-creator' ); ?></td><td><?php esc_html_e( 'Bengali image rendering', 'custom-post-image-creator' ); ?></td><td><?php esc_html_e( 'Use a current Chrome, Edge, Firefox, or Safari browser.', 'custom-post-image-creator' ); ?></td></tr>
+                    <tr><td><?php esc_html_e( 'Writable WordPress uploads directory', 'custom-post-image-creator' ); ?></td><td><?php esc_html_e( 'Store and reuse canonical PNGs', 'custom-post-image-creator' ); ?></td><td><?php esc_html_e( 'Required', 'custom-post-image-creator' ); ?></td></tr>
+                    <tr><td>PHP cURL</td><td><?php esc_html_e( 'Facebook and Telegram photo upload', 'custom-post-image-creator' ); ?></td><td><?php echo esc_html( function_exists( 'curl_init' ) ? __( 'Available', 'custom-post-image-creator' ) : __( 'Unavailable', 'custom-post-image-creator' ) ); ?></td></tr>
+                    <tr><td>PHP ZipArchive</td><td><?php esc_html_e( 'Bulk ZIP downloads only', 'custom-post-image-creator' ); ?></td><td><?php echo esc_html( class_exists( 'ZipArchive' ) ? __( 'Available', 'custom-post-image-creator' ) : __( 'Unavailable', 'custom-post-image-creator' ) ); ?></td></tr>
                 </tbody>
             </table>
-
-            <div class="cpic-guide-note">
-                <strong><?php esc_html_e( 'What to do if something is missing:', 'custom-post-image-creator' ); ?></strong>
-                <ul>
-                    <li><strong>Imagick:</strong> <?php esc_html_e( 'Ask your hosting provider to enable the php-imagick extension, or install it via your hosting control panel (cPanel → PHP Extensions).', 'custom-post-image-creator' ); ?></li>
-                    <li><strong>exec():</strong> <?php esc_html_e( 'Some shared hosts disable it. Ask your host to enable it in php.ini or contact support.', 'custom-post-image-creator' ); ?></li>
-                    <li><strong>Python3:</strong> <?php esc_html_e( 'Required only for perfect Bangla (Bengali) text shaping. If not available, the plugin will use ImageMagick pango as a fallback.', 'custom-post-image-creator' ); ?></li>
-                    <li><strong>cURL:</strong> <?php esc_html_e( 'Required for sharing to Facebook and Telegram. Usually enabled by default on most hosts.', 'custom-post-image-creator' ); ?></li>
-                </ul>
+            <div class="cpic-guide-note"><strong><?php esc_html_e( 'Important automation boundary:', 'custom-post-image-creator' ); ?></strong>
+                <?php esc_html_e( 'The WordPress editor browser captures and uploads the card when a post is saved. WP-Cron reuses that exact image; it cannot open a browser by itself. Save scheduled posts in the editor before scheduling. Posts created only through REST/import tools without a current browser image will wait briefly, then fail with instructions instead of silently switching renderers.', 'custom-post-image-creator' ); ?>
             </div>
         </div>
     </div>
@@ -381,7 +327,7 @@ if ( ! defined( 'ABSPATH' ) ) {
                 <tbody>
                     <tr>
                         <td><strong><?php esc_html_e( 'Auto Generate', 'custom-post-image-creator' ); ?></strong></td>
-                        <td><?php esc_html_e( 'Automatically generates a photocard when any post is published. Uses the category-mapped template.', 'custom-post-image-creator' ); ?></td>
+                        <td><?php esc_html_e( 'Queues publishing after a post is published and reuses the current browser-captured PNG from the category-mapped template.', 'custom-post-image-creator' ); ?></td>
                         <td><span class="cpic-ok"><?php esc_html_e( 'ON ✅', 'custom-post-image-creator' ); ?></span></td>
                     </tr>
                     <tr>
@@ -414,7 +360,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
             <div class="cpic-guide-tip">
                 <strong><?php esc_html_e( '💡 Shared Hosting Tip:', 'custom-post-image-creator' ); ?></strong>
-                <?php esc_html_e( 'The plugin uses a built-in backup system for servers where WP-Cron doesn\'t work reliably. Pending jobs are automatically processed when you visit the admin dashboard — no extra server cron needed.', 'custom-post-image-creator' ); ?>
+                <?php esc_html_e( 'WP-Cron is traffic-driven on many shared hosts. Configure a real hosting cron to request wp-cron.php once per minute for reliable publishing. A browser must first save the canonical PNG; server cron cannot render one.', 'custom-post-image-creator' ); ?>
             </div>
         </div>
     </div>
@@ -437,8 +383,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 
             <h3><?php esc_html_e( 'Full Automation Test', 'custom-post-image-creator' ); ?></h3>
             <ol class="cpic-guide-list">
-                <li><?php esc_html_e( 'Create a new WordPress post with a featured image and a category that has a template mapped.', 'custom-post-image-creator' ); ?></li>
-                <li><?php esc_html_e( 'Publish the post.', 'custom-post-image-creator' ); ?></li>
+                <li><?php esc_html_e( 'Create a post with a featured image and mapped category, then save it as a draft in the WordPress editor.', 'custom-post-image-creator' ); ?></li>
+                <li><?php esc_html_e( 'Keep the editor open until the browser has loaded the fonts and saved the canonical PNG. For scheduled posts, repeat this after the final content/template changes.', 'custom-post-image-creator' ); ?></li>
+                <li><?php esc_html_e( 'Publish or schedule the post. Background publishing reuses that PNG; it does not launch a browser.', 'custom-post-image-creator' ); ?></li>
                 <li><?php esc_html_e( 'Go to the', 'custom-post-image-creator' ); ?> <a href="<?php echo esc_url( admin_url( 'admin.php?page=cpic-dashboard&tab=jobs' ) ); ?>"><?php esc_html_e( 'Jobs & Logs', 'custom-post-image-creator' ); ?></a> <?php esc_html_e( 'tab.', 'custom-post-image-creator' ); ?></li>
                 <li><?php esc_html_e( 'You should see a new job appear. Wait 30 seconds and refresh — it should show', 'custom-post-image-creator' ); ?> <strong><?php esc_html_e( '"Published"', 'custom-post-image-creator' ); ?></strong>.</li>
                 <li><?php esc_html_e( 'Check the Facebook Page Posts/Timeline tab (not only Photos) and confirm there is exactly one post with the selected caption content and one article-link comment.', 'custom-post-image-creator' ); ?></li>
@@ -470,7 +417,7 @@ if ( ! defined( 'ABSPATH' ) ) {
                     </tr>
                     <tr>
                         <td><code><?php esc_html_e( 'Photocard image not found', 'custom-post-image-creator' ); ?></code></td>
-                        <td><?php esc_html_e( 'The image generation failed. Check that Imagick is installed and your server has enough memory.', 'custom-post-image-creator' ); ?></td>
+                        <td><?php esc_html_e( 'Open the post in a supported browser, confirm bundled fonts/images load without CORS errors, check the uploads directory and PHP upload-size limits, then render again.', 'custom-post-image-creator' ); ?></td>
                     </tr>
                     <tr>
                         <td><code><?php esc_html_e( 'Post not found', 'custom-post-image-creator' ); ?></code></td>

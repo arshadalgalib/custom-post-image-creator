@@ -1,49 +1,68 @@
-# Custom Post Image Creator 6.4.0
+# Custom Post Image Creator 6.5.0
 
-A WordPress plugin for creating template-driven social cards, with Bengali typography support, category-to-template routing, Facebook Page publishing, Telegram photo publishing, and a persistent background queue.
+WordPress plugin for template-driven social cards, Bengali typography, category routing, Facebook Page and Telegram publishing, and a persistent background queue.
 
-## Requirements
+## Hosting requirements
 
-- WordPress 5.8 or later; PHP 7.4 or later.
-- PHP Imagick and a working ImageMagick PNG build (required for image composition).
-- Python 3 with PyGObject, PangoCairo, HarfBuzz, and Cairo is strongly recommended for reliable Bengali shaping. ImageMagick's Pango delegate is the fallback shaping engine. If neither is available, Bengali rendering is rejected instead of silently producing broken glyphs.
-- `ZipArchive` for server-rendered bulk ZIP downloads.
-- PHP cURL for Facebook and Telegram photo upload.
+- WordPress 5.8+ and PHP 7.4+.
+- A current admin browser with Canvas 2D, FontFace, and Unicode Bengali fonts (the plugin bundles Noto Serif Bengali, Noto Sans Bengali, and Hind Siliguri).
+- A writable WordPress uploads directory. Generated PNGs are stored in `uploads/cpic-generated/`.
+- PHP cURL for Facebook/Telegram uploads; PHP `ZipArchive` for bulk ZIP downloads. Those two extensions are used only for the corresponding feature.
 
-Bundled fonts are in `fonts/`. The renderer registers the bundled font directory with Fontconfig and resolves font families to known files; it does not choose an arbitrary font from filesystem order.
+**Not required:** PHP Imagick, ImageMagick/Pango, Python, PyGObject, PangoCairo, HarfBuzz packages, or server-level font installation. No system package installation is needed on ordinary shared hosting.
 
-## Installation and setup
+## Install and configure
 
-1. Upload and activate the plugin ZIP through **Plugins → Add New → Upload Plugin**.
-2. Open **Post Image Creator → Templates**. Configure and activate a template; set a default template and optionally map categories in **Categories**.
-3. Configure Facebook Page and Telegram Bot credentials in the dashboard. Tokens remain server-side.
-4. Enable automatic generation (disabled by default; the prior master switch is migrated), choose destinations, and configure publishing delay and retry limit.
-5. For reliable scheduled processing, configure a real cron to call WordPress `wp-cron.php` once per minute. The plugin also schedules a single-job event and has a throttled admin-request fallback.
+1. Upload `custom-post-image-creator-6.5.0.zip` using **Plugins → Add New → Upload Plugin**, then activate.
+2. In **Post Image Creator → Templates**, review or create a template and choose the Bengali font, text boxes, sizes, wrapping, colors, layers, and background.
+3. Configure a default template and optional category mappings.
+4. Connect a Facebook Page and/or enter a Telegram bot token and chat ID. Credentials remain server-side; a blank password field does not clear a saved secret.
+5. Enable automatic publishing only after testing the destination credentials and a post. Automatic generation remains off for new installations.
+6. For regular background delivery, configure a real server cron to request `wp-cron.php` at least once per minute. WP-Cron is traffic-driven on many shared hosts.
 
-## Rendering and publishing architecture
+## Rendering decision and usage
 
-The server-side `CPIC_Renderer` is authoritative. Template previews, post previews, individual PNG downloads, manual Facebook/Telegram publishing, bulk ZIPs, and queue generation use the same template resolver and rendering code. The browser does not upload canvas images to a publishing endpoint.
+The single canonical renderer is Canvas 2D in the authenticated WordPress browser (`js/canvas-renderer.js`). Unicode text stays Unicode; the browser shapes Bengali using the bundled font. The same renderer/template/data contract is used for template preview, post preview, browser PNG creation, manual shares, and bulk actions. Once created, the PNG is saved to uploads and referenced by post metadata and the persistent job. Facebook, Telegram, retries, downloads, and the automatic queue use that exact artifact; PHP does not silently regenerate a different image.
 
-Headline auto-scaling uses Pango's shaped layout metrics when PangoCairo is available. It searches for the largest size satisfying the configured min/max, width, line count, and optional height limits. `auto_scale` off preserves the configured font size. Bengali output requires a functioning Pango/HarfBuzz-capable renderer; a status panel and preview metadata expose engine and typography diagnostics.
+### Automatic publishing boundary
 
-## Automation and retries
+The editor browser captures and uploads the card when a post is saved, including drafts/scheduled posts. Save a scheduled post in the WordPress editor after its content, category, featured image, and template are final. When the post publishes, WP-Cron reuses that captured PNG. It does not need a browser or system renderer.
 
-A single persistent `cpic_jobs` row owns each WordPress post. Jobs track Facebook post/comment IDs and Telegram message IDs separately, so a successful destination is not repeated when the other destination fails. Claims are atomic; only claims stale for at least fifteen minutes are recoverable. Retry timing uses exponential backoff, and ambiguous network outcomes are not blindly replayed. Admin retries are available from the Jobs page.
+A post published only by REST API, an importer, or another process without a current browser-created PNG cannot be rendered by background PHP in this release. The queue waits briefly for an editor upload and then fails with a clear instruction; it does not substitute a low-quality renderer. Open/save the post in wp-admin and retry. A provider-specific remote renderer is not configured because no service/API contract was selected; this release does not invent an endpoint or store remote credentials.
 
-## Troubleshooting
+Dashboard previews, direct manual sharing, and bulk actions render in the current browser. Bulk rendering is sequential to limit memory, then the server ZIPs those already-created PNG files. Cross-origin image hosts that deny browser CORS can prevent a preview/render; use same-site WordPress media URLs for template assets.
 
-- **Imagick missing:** enable the PHP Imagick extension and ensure ImageMagick can read/write PNG.
-- **Bengali shaping unavailable:** install Python 3, PyGObject, Pango/PangoCairo, HarfBuzz, Cairo, and Fontconfig, or install an ImageMagick build with its Pango delegate. Check the dashboard's Bangla Text Engine Status.
-- **Requested font unavailable:** select one of the bundled Bengali families or install the font with Fontconfig. The renderer logs the actual fallback font.
-- **No automatic jobs:** check that automatic generation is enabled and that WP-Cron/real cron is running. Inspect the Jobs page and plugin logs.
-- **Facebook failures:** verify the selected Page, Page access token, app mode/permissions, and the error displayed in the dashboard. Token expiry and permissions are reported by Graph API.
-- **Telegram failures:** verify the bot token, chat ID, bot membership/administrator rights, and Telegram's photo/caption restrictions. Ambiguous transport failures require checking the destination before retry. Only after confirming that no message was sent, clear the per-post lock with `wp option delete cpic_tg_publish_lock_POST_ID` (replace `POST_ID`), then use Jobs → Retry. For Facebook ambiguous outcomes, inspect the Page first; the publish/comment locks are intentionally retained to prevent duplicates and should be cleared only after verifying the corresponding remote post/comment state.
-- **Bulk ZIP fails:** enable PHP ZipArchive and ensure the WordPress uploads directory is writable.
+### Layout behavior and limitations
 
-## Facebook API version
+Text elements use Canvas text metrics for word wrapping, per-element max width/line/height limits, optional headline auto-scaling, alignment, background pills, and shadows. Image elements support cover/contain/fill and opacity. Very long or unusual Bengali headlines should be inspected in the preview at the actual target browser size. Browser/OS versions can produce small differences; Canvas does not provide desktop-publishing-grade paragraph controls. The plugin surfaces font/image/upload failures rather than switching render engines.
 
-The integration remains pinned to Graph API v22.0 to avoid an untested version migration. Meta's official version changelog lists v22.0 availability as TBD and documents v26.0 as released July 29, 2026; verify API status and app permissions before changing the pinned version.
+## Publishing and queue safety
 
-## Data and upgrades
+Each post has a persistent job and destination state. Facebook post/comment IDs and Telegram message IDs are stored separately so a success at one destination is not repeated when the other fails. Job claims are atomic; retries use bounded backoff. Ambiguous network outcomes are not blindly retried where that could duplicate a remote post. Manual and automatic publishing share the canonical image artifact. Tokens and app secrets are never sent to browser JavaScript.
 
-Database updates use repeatable `dbDelta` schema reconciliation. Upgrades retain templates, mappings, options, logs, and existing jobs; new independent Telegram state, destination-snapshot, and retry scheduling columns default safely for existing rows. Pending tasks from the old option-backed queue are imported idempotently into the persistent queue with their scheduled time and destination choices; the original option is retained. Deactivation and uninstall preserve all plugin data by default. To explicitly purge settings, templates, mappings, jobs, logs, post metadata, and generated images when uninstalling, enable the full-purge checkbox in Dashboard → Automation Settings before deleting the plugin.
+## Security, migrations, and data retention
+
+Browser artifact endpoints require a WordPress nonce plus `edit_post` capability. Uploads are limited to PNG, validated for signature/type, bounded to 64–4096 pixels and 15 MB, stored under the plugin-owned uploads directory, and tied to hashes of the current post/template. The job records renderer ID, input hash, template hash, and render time. Existing template/configuration/options/jobs are retained on upgrade. `dbDelta` adds independent renderer-metadata columns with safe defaults; there is no destructive reset or conversion of existing images. Existing completed jobs and images are not regenerated simply due to upgrade.
+
+Deactivation and uninstall preserve data by default. Use the deliberate full-purge setting only if you intend to remove plugin settings, templates, mappings, logs, jobs, post metadata, and generated images.
+
+## Validation evidence and limitations
+
+- `tests/canvas-renderer-smoke.js` runs the same Canvas renderer module through `@napi-rs/canvas` (Skia) with the bundled Noto fonts. It exercises Bengali conjuncts, vowel signs, reph, mixed Bengali/English, Bengali and ASCII numerals, punctuation, and a long headline.
+- `test-artifacts/bengali-canvas-renderer.png` is the generated PNG from that test and was visually inspected. It demonstrates this Skia Canvas output; it is **not** a real WordPress-browser integration test.
+- The current work environment has no PHP CLI, WordPress test install, or Chromium. Syntax was parsed with `php-parser` configured for PHP 7.4 and JavaScript syntax was checked with Node, but WordPress lifecycle, browser FontFace/CORS behavior, editor save timing, scheduled publishing, cURL integrations, and database migrations still require staging-site testing. No successful Facebook/Telegram integration test is claimed.
+
+Optional source-checkout renderer smoke test (run in the source repository, not from an installed ZIP):
+
+```sh
+npm install --no-save @napi-rs/canvas
+node tests/canvas-renderer-smoke.js
+```
+
+The test harness, generated evidence PNG, and test dependency are kept out of the installable plugin ZIP; they are not production requirements.
+
+## Research summary
+
+PHP GD plus Unicode-to-Bijoy conversion was considered but not adopted: conversion/font licensing and mapping correctness (conjuncts, reph, vowel signs, mixed scripts, and metrics) were not adequately verified, and one candidate converter had inconsistent license claims. Browser Canvas retained Unicode and produced visually inspected shaping in the Skia smoke test. Pango/Imagick can shape text when installed, but they are not universal shared-hosting dependencies. Browser-only rendering requires editor participation for background jobs; no browser process is available to WP-Cron. Remote rendering remains a future provider-specific extension.
+
+See `docs/architecture-decision-rendering.md` for the decision record and `docs/release-6.5.0.md` for the phase/test/release checklist and migration notes.

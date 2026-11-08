@@ -472,10 +472,14 @@
     function previewTemplate() {
         var config = collectConfig();
         $('#cpic-tpl-preview-img').hide();
-        $('#cpic-tpl-preview-empty').show().text('Rendering on server…');
+        $('#cpic-tpl-preview-empty').show().text('Rendering Bengali text in your browser…');
         cpicAjax('cpic_template_preview', { config: JSON.stringify(config) }, function (d) {
-            $('#cpic-tpl-preview-img').attr('src', d.url + '?t=' + Date.now()).show();
-            $('#cpic-tpl-preview-empty').hide();
+            window.cpicRenderTemplate(d.config, d.data).then(function (canvas) {
+                $('#cpic-tpl-preview-img').attr('src', canvas.toDataURL('image/png')).show();
+                $('#cpic-tpl-preview-empty').hide();
+            }).catch(function (error) {
+                $('#cpic-tpl-preview-empty').show().text('Preview error: ' + error.message);
+            });
         }, function (msg) {
             $('#cpic-tpl-preview-empty').show().text('Preview error: ' + msg);
         });
