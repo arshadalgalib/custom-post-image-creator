@@ -51,7 +51,7 @@ class CPIC_Installer {
             'cpic_logs' => array( 'id', 'log_type', 'message', 'context', 'created_at' ),
             'cpic_templates' => array( 'id', 'name', 'slug', 'config', 'is_default', 'is_active', 'created_at', 'updated_at' ),
             'cpic_category_mappings' => array( 'id', 'term_id', 'template_id', 'priority', 'created_at' ),
-            'cpic_jobs' => array( 'id', 'post_id', 'job_key', 'template_id', 'status', 'image_path', 'image_url', 'renderer_id', 'input_hash', 'template_hash', 'rendered_at', 'facebook_post_id', 'facebook_comment_id', 'telegram_message_id', 'auto_facebook', 'auto_telegram', 'next_attempt_at', 'attempts', 'max_retries', 'last_error', 'created_at', 'updated_at' ),
+            'cpic_jobs' => array( 'id', 'post_id', 'job_key', 'template_id', 'status', 'image_path', 'image_url', 'renderer_id', 'input_hash', 'template_hash', 'rendered_at', 'facebook_post_id', 'facebook_comment_id', 'telegram_message_id', 'auto_facebook', 'auto_telegram', 'auto_comment', 'next_attempt_at', 'attempts', 'max_retries', 'last_error', 'created_at', 'updated_at' ),
         );
         foreach ( $required as $suffix => $required_columns ) {
             $table = $wpdb->prefix . $suffix;
@@ -155,6 +155,7 @@ class CPIC_Installer {
             telegram_message_id VARCHAR(191) NOT NULL DEFAULT '',
             auto_facebook TINYINT(1) NULL DEFAULT NULL,
             auto_telegram TINYINT(1) NULL DEFAULT NULL,
+            auto_comment TINYINT(1) NULL DEFAULT NULL,
             next_attempt_at BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
             attempts INT NOT NULL DEFAULT 0,
             max_retries INT NOT NULL DEFAULT 3,
@@ -229,6 +230,7 @@ class CPIC_Installer {
                 $update = array(
                     'auto_facebook' => isset( $task['auto_fb'] ) ? (int) ! empty( $task['auto_fb'] ) : (int) CPIC_Settings::get_single( 'cpic_auto_fb', 0 ),
                     'auto_telegram' => isset( $task['auto_tg'] ) ? (int) ! empty( $task['auto_tg'] ) : (int) CPIC_Settings::get_single( 'cpic_auto_tg', 0 ),
+                    'auto_comment' => isset( $task['auto_comment'] ) ? (int) ! empty( $task['auto_comment'] ) : (int) CPIC_Settings::get_single( 'cpic_auto_comment', 1 ),
                 );
                 if ( isset( $task['scheduled_at'] ) ) {
                     $update['next_attempt_at'] = max( 0, (int) $task['scheduled_at'] );

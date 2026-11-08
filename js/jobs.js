@@ -51,6 +51,7 @@
             var imageUrl = safeHttpUrl(job.image_url);
             var img = imageUrl ? '<a href="' + escapeHtml(imageUrl) + '" target="_blank" rel="noopener">View</a>' : '—';
             var fb = job.facebook_post_id ? job.facebook_post_id : '—';
+            var intent = deliveryIntent(job);
             var err = job.last_error ? job.last_error : '—';
             var actions =
                 '<button type="button" class="button button-small cpic-job-retry" data-id="' + job.id + '">Retry</button> ' +
@@ -61,7 +62,7 @@
                 '<tr>' +
                 '<td><strong>' + escapeHtml(job.post_title) + '</strong><br /><small>#' + job.post_id + '</small></td>' +
                 '<td>' + escapeHtml(job.template_name || '—') + '</td>' +
-                '<td><span class="' + cls + '">' + escapeHtml(statusBadge(job.status)) + '</span><br /><small>' + img + '</small></td>' +
+                '<td><span class="' + cls + '">' + escapeHtml(statusBadge(job.status)) + '</span><br /><small>Delivery: ' + escapeHtml(intent) + '</small><br /><small>' + img + '</small></td>' +
                 '<td>' + job.attempts + ' / ' + job.max_retries + '</td>' +
                 '<td>' + escapeHtml(fb) + '<br /><small>Comment: ' + escapeHtml(job.facebook_comment_id || '—') + '</small></td>' +
                 '<td>' + escapeHtml(err) + '</td>' +
@@ -70,6 +71,21 @@
                 '</tr>'
             );
         });
+    }
+
+    function deliveryIntent(job) {
+        if (job.auto_facebook === null || job.auto_facebook === undefined || job.auto_telegram === null || job.auto_telegram === undefined) {
+            return 'Uses legacy/current settings';
+        }
+        var targets = [];
+        if (Number(job.auto_facebook) === 1) targets.push('Facebook');
+        if (Number(job.auto_telegram) === 1) targets.push('Telegram');
+        if (!targets.length) targets.push('Image only');
+        if (Number(job.auto_facebook) === 1) {
+            if (job.auto_comment === null || job.auto_comment === undefined) targets.push('comment follows settings');
+            else targets.push(Number(job.auto_comment) === 1 ? 'URL comment' : 'no comment');
+        }
+        return targets.join(' · ');
     }
 
     function safeHttpUrl(value) {

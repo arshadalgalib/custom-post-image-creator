@@ -1,4 +1,4 @@
-# Custom Post Image Creator 6.5.4
+# Custom Post Image Creator 6.5.5
 
 WordPress plugin for template-driven social cards, Bengali typography, category routing, Facebook Page and Telegram publishing, and a persistent background queue.
 
@@ -13,7 +13,7 @@ WordPress plugin for template-driven social cards, Bengali typography, category 
 
 ## Install and configure
 
-1. Upload `custom-post-image-creator-6.5.4.zip` using **Plugins → Add New → Upload Plugin**, then activate.
+1. Upload `custom-post-image-creator-6.5.5.zip` using **Plugins → Add New → Upload Plugin**, then activate.
 2. In **Post Image Creator → Templates**, review or create a template and choose the Bengali font, text boxes, sizes, wrapping, colors, layers, and background.
 3. Configure a default template and optional category mappings.
 4. Connect a Facebook Page and/or enter a Telegram bot token and chat ID. Credentials remain server-side; a blank password field does not clear a saved secret.
@@ -38,7 +38,7 @@ Text elements use Canvas text metrics for word wrapping, per-element max width/l
 
 ## Publishing and queue safety
 
-Each post has a persistent job and destination state. Facebook post/comment IDs and Telegram message IDs are stored separately so a success at one destination is not repeated when the other fails. Job claims are atomic; retries use bounded backoff. Ambiguous network outcomes are not blindly retried where that could duplicate a remote post. Manual and automatic publishing share the canonical image artifact. Jobs-page requests do not synchronously wait on social APIs; WP-Cron handles the worker. Logs older than 30 days and unreferenced generated files/abandoned upload chunks are pruned by daily maintenance. Tokens and app secrets are never sent to browser JavaScript.
+Each post has a persistent job and destination state. Facebook post/comment IDs and Telegram message IDs are stored separately so a success at one destination is not repeated when the other fails. New jobs snapshot their Facebook, Telegram, and Facebook URL-comment choices at enqueue time, so delayed processing and retries do not silently adopt later global-setting changes. The Jobs screen shows this intended delivery. Existing rows retain nullable snapshots and continue using the legacy global-setting behavior. Job claims are atomic; retries use bounded backoff. Ambiguous network outcomes are not blindly retried where that could duplicate a remote post. Manual and automatic publishing share the canonical image artifact. Jobs-page requests do not synchronously wait on social APIs; WP-Cron handles the worker. Logs older than 30 days and unreferenced generated files/abandoned upload chunks are pruned by daily maintenance. Tokens and app secrets are never sent to browser JavaScript.
 
 ## Security, migrations, and data retention
 
@@ -50,7 +50,7 @@ Deactivation and uninstall preserve data by default. Use the deliberate full-pur
 
 - `tests/canvas-renderer-smoke.js` runs the Canvas renderer through `@napi-rs/canvas` (Skia) for nine Bengali/mixed-script cases. `tests/bengali-fonts-smoke.js` separately verifies visible Bengali glyphs, distinct text metrics, and explicit SolaimanLipi regular/bold plus Noto Serif Bengali and Hind Siliguri face registration.
 - `test-artifacts/bengali-canvas-renderer.png` and `test-artifacts/bengali-font-families.png` are generated Skia PNGs and were visually inspected. They demonstrate the tested output; they are **not** real WordPress-browser integration evidence.
-- `tests/canvas-upload-smoke.js` mocks the browser-to-WordPress bridge and verifies authenticated sequential 256 KiB chunks; `tests/admin-assets-smoke.js` guards the editor/dashboard/template data bootstrap ordering; `tests/installer-schema-smoke.js` protects dbDelta-compatible table creation; `tests/pipeline-safety-smoke.js` guards current-image validation and safe artifact retention; `tests/audit-safety-smoke.js` guards Unicode captions, OAuth CSRF/token handling, output escaping, and maintenance. These tests do not run PHP or WordPress.
+- `tests/canvas-upload-smoke.js` mocks the browser-to-WordPress bridge and verifies authenticated sequential 256 KiB chunks; `tests/admin-assets-smoke.js` guards the editor/dashboard/template data bootstrap ordering; `tests/installer-schema-smoke.js` protects dbDelta-compatible table creation; `tests/job-intent-smoke.js` guards deterministic delivery snapshots and legacy fallback; `tests/pipeline-safety-smoke.js` guards current-image validation and safe artifact retention; `tests/audit-safety-smoke.js` guards Unicode captions, OAuth CSRF/token handling, output escaping, and maintenance. These tests do not run PHP or WordPress.
 - The current work environment has no PHP CLI, WordPress test install, or Chromium. Syntax was parsed with `php-parser` configured for PHP 7.4 and JavaScript syntax was checked with Node, but WordPress lifecycle, browser FontFace/CORS behavior, editor save timing, chunked uploads, scheduled publishing, outbound HTTP/cURL integrations, and database migrations still require staging-site testing. No successful Facebook/Telegram integration test is claimed.
 
 Optional source-checkout renderer smoke test (run in the source repository, not from an installed ZIP):
@@ -72,4 +72,4 @@ The test harness, generated evidence PNG, and test dependency are kept out of th
 
 PHP GD plus Unicode-to-Bijoy conversion was considered but not adopted: conversion/font licensing and mapping correctness (conjuncts, reph, vowel signs, mixed scripts, and metrics) were not adequately verified, and one candidate converter had inconsistent license claims. Browser Canvas retained Unicode and produced visually inspected shaping in the Skia smoke test. Pango/Imagick can shape text when installed, but they are not universal shared-hosting dependencies. Browser-only rendering requires editor participation for background jobs; no browser process is available to WP-Cron. Remote rendering remains a future provider-specific extension.
 
-See `docs/architecture-decision-rendering.md` for the decision record and `docs/release-6.5.4.md` for the phase/test/release checklist and migration notes.
+See `docs/architecture-decision-rendering.md` for the rendering decision record and `docs/release-6.5.5.md` for the current queue-intent release notes; prior release checklists remain in `docs/`.

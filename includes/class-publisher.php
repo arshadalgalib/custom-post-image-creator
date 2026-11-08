@@ -63,7 +63,7 @@ class CPIC_Publisher {
         $auto_tg      = isset( $job['auto_telegram'] ) ? (int) $job['auto_telegram'] : (int) CPIC_Settings::get_single( 'cpic_auto_tg', 0 );
         // Default to enabled when the option has never been saved. This
         // keeps the article-link comment part of the normal publish flow.
-        $auto_comment = (int) CPIC_Settings::get_single( 'cpic_auto_comment', 1 );
+        $auto_comment = isset( $job['auto_comment'] ) ? (int) $job['auto_comment'] : (int) CPIC_Settings::get_single( 'cpic_auto_comment', 1 );
 
         /* ── Stage 1: Resolve template ────────────────── */
         if ( empty( $job['template_id'] ) ) {

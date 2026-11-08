@@ -48,6 +48,11 @@ class CPIC_Queue {
 
         $max_retries = max( 0, (int) CPIC_Settings::get_single( 'cpic_max_retries', 3 ) );
         $delay = max( 0, (int) CPIC_Settings::get_single( 'cpic_auto_delay', 0 ) );
+        // Freeze the intended destinations when the job is created so retries
+        // are deterministic even if global settings change while it waits.
+        $auto_facebook = CPIC_Settings::get_single( 'cpic_auto_fb', 0 ) ? 1 : 0;
+        $auto_telegram = CPIC_Settings::get_single( 'cpic_auto_tg', 0 ) ? 1 : 0;
+        $auto_comment = CPIC_Settings::get_single( 'cpic_auto_comment', 1 ) ? 1 : 0;
 
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery
         $inserted = $wpdb->insert(
@@ -59,12 +64,15 @@ class CPIC_Queue {
                 'status'        => 'pending',
                 'attempts'      => 0,
                 'max_retries'   => $max_retries,
+                'auto_facebook' => $auto_facebook,
+                'auto_telegram' => $auto_telegram,
+                'auto_comment'  => $auto_comment,
                 'next_attempt_at' => time() + $delay,
                 'last_error'    => '',
                 'created_at'    => current_time( 'mysql' ),
                 'updated_at'    => current_time( 'mysql' ),
             ),
-            array( '%d', '%s', '%d', '%s', '%d', '%d', '%d', '%s', '%s', '%s' )
+            array( '%d', '%s', '%d', '%s', '%d', '%d', '%d', '%d', '%d', '%d', '%s', '%s', '%s' )
         );
 
         if ( false === $inserted ) {
@@ -214,6 +222,7 @@ class CPIC_Queue {
             'telegram_message_id' => '%s',
             'auto_facebook'       => '%d',
             'auto_telegram'       => '%d',
+            'auto_comment'        => '%d',
             'next_attempt_at'     => '%d',
             'attempts'            => '%d',
             'max_retries'         => '%d',
@@ -227,7 +236,7 @@ class CPIC_Queue {
             if ( ! isset( $fields[ $key ] ) ) {
                 continue;
             }
-            if ( in_array( $key, array( 'attempts', 'template_id', 'max_retries', 'next_attempt_at', 'auto_facebook', 'auto_telegram' ), true ) ) {
+            if ( in_array( $key, array( 'attempts', 'template_id', 'max_retries', 'next_attempt_at', 'auto_facebook', 'auto_telegram', 'auto_comment' ), true ) ) {
                 $value = (int) $value;
             } else {
                 $value = (string) $value;
