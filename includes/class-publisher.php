@@ -85,8 +85,17 @@ class CPIC_Publisher {
             return $this->handle_failure( $job_id, __( 'No active template found.', 'custom-post-image-creator' ) );
         }
 
-        /* ── Stage 2: Consume the browser-created canonical PNG ── */
-        if ( empty( $job['image_path'] ) || ! is_file( $job['image_path'] ) ) {
+        /* ── Stage 2: Consume the current browser-created canonical PNG ── */
+        $has_destination_side_effect = ! empty( $job['facebook_post_id'] ) || ! empty( $job['telegram_message_id'] );
+        if ( $has_destination_side_effect ) {
+            // Once a destination has received the image, keep that exact PNG for
+            // any remaining destinations, even if the post was edited later.
+            if ( empty( $job['image_path'] ) || ! is_file( $job['image_path'] ) ) {
+                return $this->handle_failure( $job_id, __( 'The canonical image is missing after a destination was already published; refusing to send a different image on retry.', 'custom-post-image-creator' ), true );
+            }
+        } else {
+            // Never publish a stale job image when the title, featured image,
+            // category, or template changed after the browser captured it.
             $artifact = CPIC_Canvas_Artifacts::current_for_post( $post_id );
             if ( is_wp_error( $artifact ) ) {
                 $wait_since = (int) get_post_meta( $post_id, '_cpic_render_wait_since', true );
@@ -97,7 +106,7 @@ class CPIC_Publisher {
                 if ( time() - $wait_since < 900 ) {
                     $queue->update( $job_id, array(
                         'status' => 'pending',
-                        'last_error' => __( 'Waiting for the WordPress editor browser to upload the rendered PNG.', 'custom-post-image-creator' ),
+                        'last_error' => __( 'Waiting for the WordPress editor browser to upload the current rendered PNG.', 'custom-post-image-creator' ),
                         'next_attempt_at' => time() + 60,
                     ) );
                     return false;

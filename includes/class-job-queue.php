@@ -143,7 +143,7 @@ class CPIC_Queue {
         global $wpdb;
         $table = self::table();
 
-        // Stale processing threshold: 5 minutes ago.
+        // Recover abandoned claims after fifteen minutes.
         $stale = wp_date( 'Y-m-d H:i:s', time() - 900 );
 
         $sql = "SELECT * FROM {$table}
@@ -313,24 +313,13 @@ class CPIC_Queue {
     public function delete_job( $job_id ) {
         global $wpdb;
         $table = self::table();
-        $job = $this->get_job( $job_id );
         // Atomic condition prevents deleting an active claim between a UI check and this request.
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery
         $deleted = $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE id = %d AND status NOT IN ('processing','publishing')", (int) $job_id ) );
-        if ( 1 === (int) $deleted && $job && ! empty( $job['image_path'] ) ) {
-            $this->cleanup_generated_image( $job['image_path'] );
-        }
+        // Canonical artifacts are also referenced by post metadata and may be
+        // needed for manual sharing or a later job. Leave file reclamation to
+        // the age- and reference-aware artifact pruner.
         return 1 === (int) $deleted;
-    }
-
-    /** Delete only plugin-owned generated PNGs (never arbitrary paths). */
-    private function cleanup_generated_image( $path ) {
-        $upload = wp_upload_dir();
-        $root = realpath( trailingslashit( $upload['basedir'] ) . 'cpic-generated' );
-        $file = realpath( (string) $path );
-        if ( $root && $file && 0 === strpos( $file, trailingslashit( $root ) ) && '.png' === strtolower( substr( $file, -4 ) ) && 0 === strpos( basename( $file ), 'cpic-' ) ) {
-            wp_delete_file( $file );
-        }
     }
 
     /**

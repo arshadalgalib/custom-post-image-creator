@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, Bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 6.5.2
+Stable tag: 6.5.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -26,7 +26,7 @@ Bengali shaping uses bundled Unicode fonts and the browser's Canvas text engine.
 
 == Installation ==
 
-1. Upload `custom-post-image-creator-6.5.2.zip` via Plugins > Add New > Upload Plugin and activate.
+1. Upload `custom-post-image-creator-6.5.3.zip` via Plugins > Add New > Upload Plugin and activate.
 2. Configure a template, default template, and optional category mappings.
 3. Connect Facebook and/or configure the Telegram bot and channel.
 4. Enable automatic generation only after testing. Save scheduled posts in the WordPress editor so the browser captures their canonical image.
@@ -45,6 +45,11 @@ Persistent per-post jobs record each destination independently, use atomic claim
 Artifact endpoints require a WordPress nonce and the current user's edit_post permission. The upload accepts bounded, validated PNG data only and stores it within the plugin-owned uploads subdirectory. Social credentials remain server-side.
 
 == Changelog ==
+
+= 6.5.3 =
+* Fixed fresh-install database table creation with syntax supported by WordPress dbDelta on WordPress 5.8+.
+* Prevented stale automatic cards after post/template changes and preserved canonical images when queue jobs are deleted.
+* Added installer and pipeline safety regression checks.
 
 = 6.5.2 =
 * Bundled the Unicode SolaimanLipi regular and bold fonts with their OFL 1.0 license.
@@ -71,5 +76,5 @@ Artifact endpoints require a WordPress nonce and the current user's edit_post pe
 
 == Upgrade Notice ==
 
-= 6.5.2 =
-Existing plugin data is retained. No server-side text shaping packages are required. Save posts in the WordPress editor to capture the browser-rendered PNG needed by automatic publishing.
+= 6.5.3 =
+Existing plugin data is retained. This update fixes dbDelta table creation; open the admin once after upgrading so the schema reconciliation runs. No server-side text shaping packages are required. Save posts in the WordPress editor to capture the browser-rendered PNG needed by automatic publishing.

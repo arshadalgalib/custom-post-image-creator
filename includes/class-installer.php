@@ -38,7 +38,7 @@ class CPIC_Installer {
         $table   = $wpdb->prefix . 'cpic_logs';
         $charset = $wpdb->get_charset_collate();
 
-        $sql = "CREATE TABLE IF NOT EXISTS {$table} (
+        $sql = "CREATE TABLE {$table} (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
             log_type VARCHAR(50) NOT NULL DEFAULT 'error',
             message TEXT NOT NULL,
@@ -59,7 +59,7 @@ class CPIC_Installer {
         $table   = $wpdb->prefix . 'cpic_templates';
         $charset = $wpdb->get_charset_collate();
 
-        $sql = "CREATE TABLE IF NOT EXISTS {$table} (
+        $sql = "CREATE TABLE {$table} (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
             name VARCHAR(191) NOT NULL,
             slug VARCHAR(191) NOT NULL,
@@ -84,7 +84,7 @@ class CPIC_Installer {
         $table   = $wpdb->prefix . 'cpic_category_mappings';
         $charset = $wpdb->get_charset_collate();
 
-        $sql = "CREATE TABLE IF NOT EXISTS {$table} (
+        $sql = "CREATE TABLE {$table} (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
             term_id BIGINT(20) UNSIGNED NOT NULL,
             template_id BIGINT(20) UNSIGNED NOT NULL,
@@ -105,7 +105,7 @@ class CPIC_Installer {
         $table   = $wpdb->prefix . 'cpic_jobs';
         $charset = $wpdb->get_charset_collate();
 
-        $sql = "CREATE TABLE IF NOT EXISTS {$table} (
+        $sql = "CREATE TABLE {$table} (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
             post_id BIGINT(20) UNSIGNED NOT NULL,
             job_key VARCHAR(191) NOT NULL,
