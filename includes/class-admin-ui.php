@@ -38,6 +38,7 @@ class CPIC_Admin_UI {
 
         /* Dashboard preview */
         add_action( 'wp_ajax_cpic_preview_post', array( $this, 'ajax_preview_post' ) );
+        add_action( 'wp_ajax_cpic_bulk_download', array( $this, 'ajax_bulk_download' ) );
     }
 
     /* ─── Menu ──────────────────────────────────────────── */
@@ -213,6 +214,9 @@ class CPIC_Admin_UI {
             }
             $common_data['templates']   = $template_data;
             $common_data['fontChoices'] = array( 'Noto Serif Bengali', 'Hind Siliguri', 'Noto Sans Bengali' );
+            foreach ( array( 'SolaimanLipi' => 'SolaimanLipi.ttf', 'Siyam Rupali' => 'SiyamRupali.ttf' ) as $font_name => $font_file ) {
+                if ( file_exists( CPIC_PLUGIN_DIR . 'fonts/' . $font_file ) ) { $common_data['fontChoices'][] = $font_name; }
+            }
             $common_data['defaultTemplateId'] = (int) CPIC_Settings::get_single( 'cpic_default_template_id' );
             wp_localize_script( 'cpic-templates', 'cpicData', $common_data );
             return;
@@ -308,14 +312,15 @@ class CPIC_Admin_UI {
 
         $id   = isset( $_POST['id'] ) ? absint( $_POST['id'] ) : 0;
         $name = isset( $_POST['name'] ) ? sanitize_text_field( wp_unslash( $_POST['name'] ) ) : '';
-        $raw  = isset( $_POST['config'] ) ? json_decode( wp_unslash( $_POST['config'] ), true ) : array();
+        $raw_json = isset( $_POST['config'] ) ? wp_unslash( $_POST['config'] ) : '{}';
+        $raw = json_decode( $raw_json, true );
 
         if ( empty( $name ) ) {
             wp_send_json_error( array( 'message' => __( 'Template name is required.', 'custom-post-image-creator' ) ) );
         }
 
-        if ( ! is_array( $raw ) ) {
-            $raw = array();
+        if ( ! is_array( $raw ) || JSON_ERROR_NONE !== json_last_error() ) {
+            wp_send_json_error( array( 'message' => __( 'Template configuration is invalid JSON.', 'custom-post-image-creator' ) ) );
         }
 
         $config = CPIC_Template_Manager::normalize_config( $this->sanitize_config( $raw ) );
@@ -378,7 +383,7 @@ class CPIC_Admin_UI {
         cpic()->security->verify_ajax_request();
 
         $raw = isset( $_POST['template'] ) ? json_decode( wp_unslash( $_POST['template'] ), true ) : array();
-        if ( ! is_array( $raw ) || empty( $raw['config'] ) || ! is_array( $raw['config'] ) ) {
+        if ( JSON_ERROR_NONE !== json_last_error() || ! is_array( $raw ) || empty( $raw['config'] ) || ! is_array( $raw['config'] ) ) {
             wp_send_json_error( array( 'message' => __( 'Invalid template JSON. Export a template from this plugin first.', 'custom-post-image-creator' ) ) );
         }
 
@@ -426,8 +431,8 @@ class CPIC_Admin_UI {
         $id = isset( $_POST['id'] ) ? absint( $_POST['id'] ) : 0;
         $tpl = CPIC_Template_Manager::get_template( $id );
 
-        if ( ! $tpl ) {
-            wp_send_json_error( array( 'message' => __( 'Invalid template.', 'custom-post-image-creator' ) ) );
+        if ( ! $tpl || empty( $tpl['is_active'] ) ) {
+            wp_send_json_error( array( 'message' => __( 'Select an active template to set it as default.', 'custom-post-image-creator' ) ) );
         }
 
         $ok = CPIC_Template_Manager::update_template( $id, array( 'is_active' => $tpl['is_active'] ), true );
@@ -441,7 +446,10 @@ class CPIC_Admin_UI {
         cpic()->security->verify_ajax_request();
 
         $raw  = isset( $_POST['config'] ) ? json_decode( wp_unslash( $_POST['config'] ), true ) : array();
-        $config = CPIC_Template_Manager::normalize_config( is_array( $raw ) ? $this->sanitize_config( $raw ) : array() );
+        if ( JSON_ERROR_NONE !== json_last_error() || ! is_array( $raw ) ) {
+            wp_send_json_error( array( 'message' => __( 'Template configuration is invalid JSON.', 'custom-post-image-creator' ) ) );
+        }
+        $config = CPIC_Template_Manager::normalize_config( $this->sanitize_config( $raw ) );
 
         $data = CPIC_Template_Manager::sample_preview_data();
         if ( ! empty( $_POST['featured_image'] ) ) {
@@ -454,7 +462,7 @@ class CPIC_Admin_UI {
             wp_send_json_error( array( 'message' => $result->get_error_message() ) );
         }
 
-        wp_send_json_success( array( 'url' => $result['url'] ) );
+        wp_send_json_success( array( 'url' => $result['url'], 'text_mode' => CPIC_Renderer::$last_text_mode, 'typography' => CPIC_Renderer::$last_typography ) );
     }
 
     /* ─── AJAX: category mappings ─────────────────────────── */
@@ -503,7 +511,7 @@ class CPIC_Admin_UI {
         cpic()->security->verify_ajax_request();
 
         // Process any pending jobs while we're here (shared hosting cron backup).
-        if ( CPIC_Settings::get_single( 'cpic_auto_generate', 1 ) ) {
+        if ( CPIC_Settings::get_single( 'cpic_auto_generate', 0 ) ) {
             cpic()->automation->process_due_jobs( 5 );
         }
 
@@ -529,6 +537,8 @@ class CPIC_Admin_UI {
                 'max_retries'        => (int) $job['max_retries'],
                 'facebook_post_id'   => $job['facebook_post_id'],
                 'facebook_comment_id'=> $job['facebook_comment_id'],
+                'telegram_message_id' => $job['telegram_message_id'],
+                'next_attempt_at'    => (int) $job['next_attempt_at'],
                 'image_url'          => $job['image_url'],
                 'last_error'         => $job['last_error'],
                 'created_at'         => $job['created_at'],
@@ -552,14 +562,16 @@ class CPIC_Admin_UI {
             wp_send_json_error( array( 'message' => __( 'Job not found.', 'custom-post-image-creator' ) ) );
         }
 
-        if ( 'processing' === $job['status'] ) {
-            cpic()->queue->update( $job_id, array( 'status' => 'pending', 'last_error' => '' ) );
-            $job = cpic()->queue->get_job( $job_id );
+        if ( in_array( $job['status'], array( 'processing', 'publishing' ), true ) ) {
+            wp_send_json_error( array( 'message' => __( 'This job is currently being processed. Try again after it finishes or becomes stale.', 'custom-post-image-creator' ) ), 409 );
         }
 
         cpic()->publisher->process_job( $job );
-
-        wp_send_json_success( array( 'message' => __( 'Job processed.', 'custom-post-image-creator' ) ) );
+        $fresh = cpic()->queue->get_job( $job_id );
+        if ( $fresh && 'failed' === $fresh['status'] ) {
+            wp_send_json_error( array( 'message' => $fresh['last_error'] ?: __( 'Job failed.', 'custom-post-image-creator' ) ) );
+        }
+        wp_send_json_success( array( 'message' => $fresh ? sprintf( __( 'Job state: %s', 'custom-post-image-creator' ), $fresh['status'] ) : __( 'Job processed.', 'custom-post-image-creator' ) ) );
     }
 
     public function ajax_job_retry() {
@@ -572,7 +584,12 @@ class CPIC_Admin_UI {
             wp_send_json_error( array( 'message' => __( 'Job not found.', 'custom-post-image-creator' ) ) );
         }
 
-        cpic()->queue->update( $job_id, array( 'status' => 'pending', 'attempts' => 0, 'last_error' => '' ) );
+        if ( 'failed' !== $job['status'] ) {
+            wp_send_json_error( array( 'message' => __( 'Only a failed job can be retried; active and pending jobs are left unchanged.', 'custom-post-image-creator' ) ), 409 );
+        }
+        if ( ! cpic()->queue->retry_failed_job( $job_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'The job changed state before retry could be claimed. Refresh the Jobs page.', 'custom-post-image-creator' ) ), 409 );
+        }
         cpic()->publisher->process_job( cpic()->queue->get_job( $job_id ) );
 
         wp_send_json_success( array( 'message' => __( 'Job retried.', 'custom-post-image-creator' ) ) );
@@ -582,9 +599,18 @@ class CPIC_Admin_UI {
         cpic()->security->verify_ajax_request();
 
         $job_id = isset( $_POST['job_id'] ) ? absint( $_POST['job_id'] ) : 0;
-        $ok     = cpic()->queue->delete_job( $job_id );
-
-        wp_send_json_success( array( 'message' => $ok ? __( 'Job deleted.', 'custom-post-image-creator' ) : __( 'Delete failed.', 'custom-post-image-creator' ) ) );
+        $job = cpic()->queue->get_job( $job_id );
+        if ( ! $job ) {
+            wp_send_json_error( array( 'message' => __( 'Job not found.', 'custom-post-image-creator' ) ), 404 );
+        }
+        if ( in_array( $job['status'], array( 'processing', 'publishing' ), true ) ) {
+            wp_send_json_error( array( 'message' => __( 'An active job cannot be deleted.', 'custom-post-image-creator' ) ), 409 );
+        }
+        $ok = cpic()->queue->delete_job( $job_id );
+        if ( ! $ok ) {
+            wp_send_json_error( array( 'message' => __( 'The job changed state and could not be safely deleted.', 'custom-post-image-creator' ) ), 409 );
+        }
+        wp_send_json_success( array( 'message' => __( 'Job deleted.', 'custom-post-image-creator' ) ) );
     }
 
     /**
@@ -596,8 +622,8 @@ class CPIC_Admin_UI {
         cpic()->security->verify_ajax_request();
 
         $post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0;
-        if ( ! $post_id ) {
-            wp_send_json_error( array( 'message' => __( 'Invalid post.', 'custom-post-image-creator' ) ) );
+        if ( ! $post_id || ! get_post( $post_id ) || ! current_user_can( 'edit_post', $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Invalid post or permission denied.', 'custom-post-image-creator' ) ), 403 );
         }
 
         $tpl = cpic()->category_mapper->resolve_template_for_post( $post_id );
@@ -615,7 +641,81 @@ class CPIC_Admin_UI {
             'url'           => $result['url'],
             'template_name' => $tpl['name'],
             'text_mode'     => CPIC_Renderer::$last_text_mode,
+            'typography'    => CPIC_Renderer::$last_typography,
             'engines'       => CPIC_Renderer::text_engine_report(),
+        ) );
+    }
+
+    /** Generate a server-side ZIP from the authoritative renderer. */
+    public function ajax_bulk_download() {
+        cpic()->security->verify_ajax_request();
+        if ( ! class_exists( 'ZipArchive' ) ) {
+            wp_send_json_error( array( 'message' => __( 'The PHP ZipArchive extension is required for bulk downloads.', 'custom-post-image-creator' ) ) );
+        }
+        $ids = isset( $_POST['post_ids'] ) && is_array( $_POST['post_ids'] ) ? array_values( array_unique( array_map( 'absint', wp_unslash( $_POST['post_ids'] ) ) ) ) : array();
+        $ids = array_values( array_filter( $ids ) );
+        if ( count( $ids ) > 100 ) {
+            wp_send_json_error( array( 'message' => __( 'Bulk ZIP is limited to 100 posts per request.', 'custom-post-image-creator' ) ) );
+        }
+        if ( empty( $ids ) ) {
+            wp_send_json_error( array( 'message' => __( 'Select at least one post (up to 100 per ZIP).', 'custom-post-image-creator' ) ) );
+        }
+        $upload = wp_upload_dir();
+        $dir = trailingslashit( $upload['basedir'] ) . 'cpic-generated/';
+        if ( ! wp_mkdir_p( $dir ) || ! is_writable( $dir ) ) {
+            wp_send_json_error( array( 'message' => __( 'The generated-image directory is not writable.', 'custom-post-image-creator' ) ) );
+        }
+        $old_archives = glob( $dir . 'cpic-bulk-*.zip' );
+        foreach ( is_array( $old_archives ) ? $old_archives : array() as $old_zip ) {
+            if ( is_file( $old_zip ) && filemtime( $old_zip ) < time() - DAY_IN_SECONDS ) { wp_delete_file( $old_zip ); }
+        }
+        $zip_name = 'cpic-bulk-' . wp_generate_uuid4() . '.zip';
+        $zip_path = $dir . $zip_name;
+        $zip = new ZipArchive();
+        if ( true !== $zip->open( $zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
+            wp_send_json_error( array( 'message' => __( 'Could not create the ZIP archive.', 'custom-post-image-creator' ) ) );
+        }
+        $failures = array();
+        $generated = array();
+        foreach ( $ids as $post_id ) {
+            $post = get_post( $post_id );
+            if ( ! $post || 'post' !== $post->post_type || 'publish' !== $post->post_status || ! current_user_can( 'edit_post', $post_id ) ) {
+                $failures[] = array( 'post_id' => $post_id, 'message' => __( 'Post unavailable or permission denied.', 'custom-post-image-creator' ) );
+                continue;
+            }
+            try {
+                $template = cpic()->category_mapper->resolve_template_for_post( $post_id );
+                if ( ! $template || empty( $template['config'] ) ) {
+                    $failures[] = array( 'post_id' => $post_id, 'message' => __( 'No active template could be resolved.', 'custom-post-image-creator' ) );
+                    continue;
+                }
+                $image = cpic()->image_generator->generate_from_template( $post_id, $template['config'] );
+            } catch ( \Throwable $e ) {
+                CPIC_Logger::log( 'bulk', __( 'Unexpected bulk image generation error.', 'custom-post-image-creator' ), array( 'post_id' => $post_id, 'error' => $e->getMessage() ) );
+                $failures[] = array( 'post_id' => $post_id, 'message' => __( 'Unexpected image generation failure.', 'custom-post-image-creator' ) );
+                continue;
+            }
+            if ( is_wp_error( $image ) || empty( $image['path'] ) || ! is_file( $image['path'] ) ) {
+                $failures[] = array( 'post_id' => $post_id, 'message' => is_wp_error( $image ) ? $image->get_error_message() : __( 'Image generation failed.', 'custom-post-image-creator' ) );
+                continue;
+            }
+            $generated[] = $image['path'];
+            if ( ! $zip->addFile( $image['path'], 'cpic-' . $post_id . '.png' ) ) {
+                $failures[] = array( 'post_id' => $post_id, 'message' => __( 'Could not add image to the ZIP archive.', 'custom-post-image-creator' ) );
+            }
+        }
+        $closed = $zip->close();
+        foreach ( $generated as $path ) {
+            cpic()->image_generator->cleanup( $path );
+        }
+        if ( ! $closed || ! is_file( $zip_path ) || ! filesize( $zip_path ) ) {
+            wp_delete_file( $zip_path );
+            wp_send_json_error( array( 'message' => __( 'ZIP creation failed.', 'custom-post-image-creator' ), 'failures' => $failures ) );
+        }
+        wp_send_json_success( array(
+            'url' => trailingslashit( $upload['baseurl'] ) . 'cpic-generated/' . rawurlencode( $zip_name ),
+            'generated' => count( $ids ) - count( $failures ),
+            'failures' => $failures,
         ) );
     }
 
@@ -678,7 +778,7 @@ class CPIC_Admin_UI {
 
                 foreach ( array(
                     'x', 'y', 'width', 'height', 'font_size', 'min_font_size', 'max_font_size',
-                    'max_lines', 'max_width', 'padding_x', 'padding_y', 'border_radius',
+                    'max_lines', 'max_width', 'max_height', 'padding_x', 'padding_y', 'border_radius',
                     'opacity', 'shadow_offset',
                 ) as $int_field ) {
                     if ( isset( $el[ $int_field ] ) ) {

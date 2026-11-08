@@ -1,101 +1,49 @@
-# Custom Post Image Creator v5.2.0
+# Custom Post Image Creator 6.4.0
 
-Custom Post Image Creator generates social media photocards for WordPress posts and publishes them automatically to Facebook Pages and Telegram channels.
+A WordPress plugin for creating template-driven social cards, with Bengali typography support, category-to-template routing, Facebook Page publishing, Telegram photo publishing, and a persistent background queue.
 
-## Features
+## Requirements
 
-- Photocard generation from post data
-  - Background
-  - Featured image
-  - Bangla title
-  - Bangla date
-  - Logo
-- Facebook Page publishing (Graph API)
-- Telegram publishing (Bot API)
-- Auto-publish queue with WP-Cron worker
-- Bulk operations for download/share
-- Bangla-friendly typography support
+- WordPress 5.8 or later; PHP 7.4 or later.
+- PHP Imagick and a working ImageMagick PNG build (required for image composition).
+- Python 3 with PyGObject, PangoCairo, HarfBuzz, and Cairo is strongly recommended for reliable Bengali shaping. ImageMagick's Pango delegate is the fallback shaping engine. If neither is available, Bengali rendering is rejected instead of silently producing broken glyphs.
+- `ZipArchive` for server-rendered bulk ZIP downloads.
+- PHP cURL for Facebook and Telegram photo upload.
 
-## Full Automation Workflow
+Bundled fonts are in `fonts/`. The renderer registers the bundled font directory with Fontconfig and resolves font families to known files; it does not choose an arbitrary font from filesystem order.
 
-When Auto Publish is enabled, the plugin follows this queue-based flow:
+## Installation and setup
 
-1. WordPress post is published
-2. Plugin saves a queue job in database option `cpic_publish_queue`
-3. Cron worker runs every minute (`cpic_cron_process_queue`)
-4. Worker prepares image:
-   - Uses editor-captured image if available
-   - Falls back to server-side generation automatically if no stored image exists
-5. Worker posts to Facebook and/or Telegram
-6. On transient failures, job remains queued for retry
+1. Upload and activate the plugin ZIP through **Plugins → Add New → Upload Plugin**.
+2. Open **Post Image Creator → Templates**. Configure and activate a template; set a default template and optionally map categories in **Categories**.
+3. Configure Facebook Page and Telegram Bot credentials in the dashboard. Tokens remain server-side.
+4. Enable automatic generation (disabled by default; the prior master switch is migrated), choose destinations, and configure publishing delay and retry limit.
+5. For reliable scheduled processing, configure a real cron to call WordPress `wp-cron.php` once per minute. The plugin also schedules a single-job event and has a throttled admin-request fallback.
 
-This supports no-click automation after publish.
+## Rendering and publishing architecture
 
-## cPanel Cron Setup (Recommended)
+The server-side `CPIC_Renderer` is authoritative. Template previews, post previews, individual PNG downloads, manual Facebook/Telegram publishing, bulk ZIPs, and queue generation use the same template resolver and rendering code. The browser does not upload canvas images to a publishing endpoint.
 
-Use real server cron for reliable automation.
+Headline auto-scaling uses Pango's shaped layout metrics when PangoCairo is available. It searches for the largest size satisfying the configured min/max, width, line count, and optional height limits. `auto_scale` off preserves the configured font size. Bengali output requires a functioning Pango/HarfBuzz-capable renderer; a status panel and preview metadata expose engine and typography diagnostics.
 
-### 1) Disable visitor-triggered WP-Cron
+## Automation and retries
 
-Add this line to `wp-config.php`:
+A single persistent `cpic_jobs` row owns each WordPress post. Jobs track Facebook post/comment IDs and Telegram message IDs separately, so a successful destination is not repeated when the other destination fails. Claims are atomic; only claims stale for at least fifteen minutes are recoverable. Retry timing uses exponential backoff, and ambiguous network outcomes are not blindly replayed. Admin retries are available from the Jobs page.
 
-```php
-define('DISABLE_WP_CRON', true);
-```
+## Troubleshooting
 
-### 2) Add cPanel cron job (every 1 minute)
+- **Imagick missing:** enable the PHP Imagick extension and ensure ImageMagick can read/write PNG.
+- **Bengali shaping unavailable:** install Python 3, PyGObject, Pango/PangoCairo, HarfBuzz, Cairo, and Fontconfig, or install an ImageMagick build with its Pango delegate. Check the dashboard's Bangla Text Engine Status.
+- **Requested font unavailable:** select one of the bundled Bengali families or install the font with Fontconfig. The renderer logs the actual fallback font.
+- **No automatic jobs:** check that automatic generation is enabled and that WP-Cron/real cron is running. Inspect the Jobs page and plugin logs.
+- **Facebook failures:** verify the selected Page, Page access token, app mode/permissions, and the error displayed in the dashboard. Token expiry and permissions are reported by Graph API.
+- **Telegram failures:** verify the bot token, chat ID, bot membership/administrator rights, and Telegram's photo/caption restrictions. Ambiguous transport failures require checking the destination before retry. Only after confirming that no message was sent, clear the per-post lock with `wp option delete cpic_tg_publish_lock_POST_ID` (replace `POST_ID`), then use Jobs → Retry. For Facebook ambiguous outcomes, inspect the Page first; the publish/comment locks are intentionally retained to prevent duplicates and should be cleared only after verifying the corresponding remote post/comment state.
+- **Bulk ZIP fails:** enable PHP ZipArchive and ensure the WordPress uploads directory is writable.
 
-Example command:
+## Facebook API version
 
-```bash
-/usr/local/bin/php -q /home/CPANEL_USER/public_html/wp-cron.php > /dev/null 2>&1
-```
+The integration remains pinned to Graph API v22.0 to avoid an untested version migration. Meta's official version changelog lists v22.0 availability as TBD and documents v26.0 as released July 29, 2026; verify API status and app permissions before changing the pinned version.
 
-Adjust PHP path and WordPress path for your server.
+## Data and upgrades
 
-If PHP CLI path is not valid on your host, use HTTP fallback:
-
-```bash
-curl -fsS "https://YOUR-DOMAIN.com/wp-cron.php?doing_wp_cron" > /dev/null 2>&1
-```
-
-## Required Plugin Settings
-
-In plugin dashboard, ensure:
-
-- Auto Publish = ON
-- Auto Facebook = ON (if Facebook automation needed)
-- Auto Telegram = ON (if Telegram automation needed)
-- Valid Facebook Page access token and selected page
-- Valid Telegram bot token and chat id
-
-## Practical Reliability Notes
-
-- The automation is fully queue-based and runs without manual share clicks.
-- External APIs can still fail (expired tokens, rate limits, network issues).
-- Failures are logged and retried by queue processing.
-- If logs show only "Auto-publish task queued" and never "task processing started", cron is not executing reliably. This version also triggers immediate processing on publish/image-capture for due tasks, but server cron should still be configured correctly.
-- Worker diagnostics now include these log lines:
-  - Worker tick: queue processing started.
-  - Worker tick: queue processing finished.
-  - Worker tick: queue empty.
-
-## Server Requirements
-
-- WordPress 5.8+
-- PHP 7.4+
-- Imagick extension
-- Python + PangoCairo optional (improves complex Bangla text shaping for server overlay path)
-
-## File Overview
-
-- Main bootstrap: `custom-post-image-creator.php`
-- Queue worker: `includes/class-auto-publisher.php`
-- Image generator: `includes/class-image-generator.php`
-- Facebook API: `includes/class-facebook-api.php`
-- Telegram API: `includes/class-telegram-api.php`
-- Admin dashboard template: `templates/admin-dashboard.php`
-
-## Version
-
-Current plugin version: 5.2.0
+Database updates use repeatable `dbDelta` schema reconciliation. Upgrades retain templates, mappings, options, logs, and existing jobs; new independent Telegram state, destination-snapshot, and retry scheduling columns default safely for existing rows. Pending tasks from the old option-backed queue are imported idempotently into the persistent queue with their scheduled time and destination choices; the original option is retained. Deactivation and uninstall preserve all plugin data by default. To explicitly purge settings, templates, mappings, jobs, logs, post metadata, and generated images when uninstalling, enable the full-purge checkbox in Dashboard → Automation Settings before deleting the plugin.

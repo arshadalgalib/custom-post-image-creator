@@ -252,19 +252,12 @@ body.cpic-dark {
     border-color: var(--cpic-primary);
 }
 
-/* ── Canvas Preview ────────────────────────────────────── */
+/* ── Server-rendered preview ──────────────────────────── */
 .cpic-canvas-container {
     text-align: center;
     margin-bottom: 12px;
 }
-#cpic-canvas {
-    max-width: 100%;
-    height: auto;
-    border: 2px solid var(--cpic-border);
-    border-radius: var(--cpic-radius);
-    background: #1a1a2e;
-    box-shadow: var(--cpic-shadow);
-}
+
 .cpic-preview-hint {
     color: var(--cpic-text-muted);
     font-style: italic;

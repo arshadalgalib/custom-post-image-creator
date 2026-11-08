@@ -113,6 +113,7 @@
             { key: 'align', type: 'select', label: 'Align', options: ['left', 'center', 'right'] },
             { key: 'max_lines', type: 'number', label: 'Max Lines' },
             { key: 'max_width', type: 'number', label: 'Max Width' },
+            { key: 'max_height', type: 'number', label: 'Max Height (0 = available canvas height)' },
             { key: 'line_height', type: 'number', label: 'Line Height', step: '0.1' },
             { key: 'letter_spacing', type: 'number', label: 'Letter Spacing', step: '0.1' },
             { key: 'x', type: 'number', label: 'X' },
@@ -228,6 +229,7 @@
             case 'max_font_size': return 56;
             case 'max_lines': return 3;
             case 'max_width': return 940;
+            case 'max_height': return 0;
             case 'line_height': return 1.35;
             case 'letter_spacing': return 0;
             case 'padding_x': return 16;

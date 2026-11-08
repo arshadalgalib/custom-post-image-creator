@@ -1,7 +1,7 @@
 <?php
 /**
- * Uninstall handler – removes all plugin options, post meta and the
- * custom log table when the plugin is deleted from WordPress.
+ * Uninstall handler – preserves all data by default; an explicit admin option
+ * enables removal of plugin options, post meta, tables and generated files.
  *
  * @package CustomPostImageCreator
  */
@@ -11,6 +11,14 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 }
 
 global $wpdb;
+
+// Preserve templates, mappings, jobs, credentials, settings, post metadata and
+// generated images unless an administrator explicitly opted into a full purge.
+wp_clear_scheduled_hook( 'cpic_cron_process_queue' );
+wp_clear_scheduled_hook( 'cpic_cron_process_jobs' );
+if ( ! get_option( 'cpic_delete_data_on_uninstall', 0 ) ) {
+    return;
+}
 
 $cpic_options = array(
     'cpic_title_font',
@@ -55,6 +63,11 @@ $cpic_options = array(
     'cpic_max_retries',
     'cpic_default_template_id',
     'cpic_db_version',
+    'cpic_delete_data_on_uninstall',
+    'cpic_legacy_queue_event_cleared',
+    'cpic_pending_process',
+    'cpic_legacy_queue_migrated',
+    'cpic_last_cron_run',
 );
 
 foreach ( $cpic_options as $option ) {
@@ -65,10 +78,32 @@ foreach ( $cpic_options as $option ) {
 delete_post_meta_by_key( 'cpic_last_shared_to_facebook' );
 delete_post_meta_by_key( 'cpic_last_shared_to_telegram' );
 delete_post_meta_by_key( 'cpic_auto_canvas_image_path' );
+delete_post_meta_by_key( 'cpic_telegram_message_id' );
+delete_post_meta_by_key( 'cpic_fb_post_id' );
+delete_post_meta_by_key( 'cpic_fb_pending_media_id' );
+delete_post_meta_by_key( 'cpic_fb_comment_id' );
+delete_post_meta_by_key( 'cpic_fb_comment_lock' );
+delete_post_meta_by_key( 'cpic_fb_publish_lock' );
 
-// Remove scheduled cron events.
-wp_clear_scheduled_hook( 'cpic_cron_process_queue' );
-wp_clear_scheduled_hook( 'cpic_cron_process_jobs' );
+// Remove plugin-owned upload/cache directories only for an explicit full purge.
+$upload = wp_upload_dir();
+foreach ( array( 'cpic-temp', 'cpic-generated', 'cpic-previews', 'cpic-fontconfig' ) as $cpic_dir ) {
+    $path = trailingslashit( $upload['basedir'] ) . $cpic_dir;
+    $root = realpath( $path );
+    if ( ! $root || ! is_dir( $root ) ) { continue; }
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ( $iterator as $item ) {
+        if ( $item->isLink() || $item->isFile() ) {
+            wp_delete_file( $item->getPathname() );
+        } elseif ( $item->isDir() ) {
+            @rmdir( $item->getPathname() );
+        }
+    }
+    @rmdir( $root );
+}
 
 // Drop the custom tables.
 $table = $wpdb->prefix . 'cpic_logs';

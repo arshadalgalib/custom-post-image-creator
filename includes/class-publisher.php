@@ -34,32 +34,17 @@ class CPIC_Publisher {
             return true;
         }
 
-        // Atomic compare-and-swap claim. Only ONE process may work a job.
-        // Jobs currently in 'processing'/'publishing' are in-flight elsewhere
-        // and are left untouched, so cron ticks cannot post duplicates while
-        // a slow publish (up to 120s HTTP timeout) is still running.
-        $table   = $wpdb->prefix . 'cpic_jobs';
-        $claimed = $wpdb->query( $wpdb->prepare(
-            "UPDATE {$table} SET status = 'processing', updated_at = %s
-             WHERE id = %d AND status IN ('pending','generated','publishing','failed')",
-            current_time( 'mysql' ),
-            $job_id
-        ) );
-
-        if ( ! $claimed ) {
-            // Another process already claimed it (or it reached published).
-            return true;
+        // Atomic due/stale compare-and-swap claim prevents overlapping cron and admin workers.
+        if ( ! $queue->claim_job( $job_id ) ) {
+            return false;
         }
-
         $job = $queue->get_job( $job_id );
 
         try {
             return $this->run_pipeline( $job );
         } catch ( \Throwable $e ) {
             CPIC_Logger::log( 'publisher', __( 'Unhandled exception in pipeline.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'error' => $e->getMessage() ) );
-            $queue->update( $job_id, array( 'status' => 'pending', 'last_error' => $e->getMessage() ) );
-            $queue->bump_attempts( $job_id );
-            return false;
+            return $this->handle_failure( $job_id, __( 'Unexpected processing error. Check server logs for details.', 'custom-post-image-creator' ) );
         }
     }
 
@@ -74,7 +59,8 @@ class CPIC_Publisher {
         $post_id = (int) $job['post_id'];
         $queue   = cpic()->queue;
 
-        $auto_fb      = (int) CPIC_Settings::get_single( 'cpic_auto_fb', 0 );
+        $auto_fb      = isset( $job['auto_facebook'] ) ? (int) $job['auto_facebook'] : (int) CPIC_Settings::get_single( 'cpic_auto_fb', 0 );
+        $auto_tg      = isset( $job['auto_telegram'] ) ? (int) $job['auto_telegram'] : (int) CPIC_Settings::get_single( 'cpic_auto_tg', 0 );
         // Default to enabled when the option has never been saved. This
         // keeps the article-link comment part of the normal publish flow.
         $auto_comment = (int) CPIC_Settings::get_single( 'cpic_auto_comment', 1 );
@@ -88,6 +74,10 @@ class CPIC_Publisher {
             }
         } else {
             $tpl = CPIC_Template_Manager::get_template( (int) $job['template_id'] );
+            if ( ! $tpl || empty( $tpl['is_active'] ) ) {
+                $tpl = cpic()->category_mapper->resolve_template_for_post( $post_id );
+                if ( $tpl ) { $queue->update( $job_id, array( 'template_id' => (int) $tpl['id'] ) ); }
+            }
         }
 
         if ( ! $tpl ) {
@@ -127,7 +117,7 @@ class CPIC_Publisher {
                 // Retrying could create a duplicate, so fail terminally.
                 $terminal = in_array(
                     $result->get_error_code(),
-                    array( 'fb_curl_error', 'fb_api_error', 'fb_no_photo_id' ),
+                    array( 'fb_curl_error', 'fb_no_photo_id' ),
                     true
                 );
                 return $this->handle_failure( $job_id, $result->get_error_message(), $terminal );
@@ -165,8 +155,29 @@ class CPIC_Publisher {
             $job = $queue->get_job( $job_id );
         }
 
-        /* ── Stage 5: Complete ────────────────────────── */
-        $queue->update( $job_id, array( 'status' => 'published', 'last_error' => '' ) );
+        /* ── Stage 5: Telegram ────────────────────────── */
+        if ( $auto_tg && empty( $job['telegram_message_id'] ) ) {
+            // Recover a successful API response persisted before a process interruption.
+            $known_message_id = get_post_meta( $post_id, 'cpic_telegram_message_id', true );
+            if ( $known_message_id ) {
+                $queue->update( $job_id, array( 'telegram_message_id' => (string) $known_message_id ) );
+                $job = $queue->get_job( $job_id );
+            } else {
+                $queue->update( $job_id, array( 'status' => 'publishing' ) );
+                $tg_result = cpic()->telegram_api->share( $post_id, $job['image_path'] );
+                if ( is_wp_error( $tg_result ) ) {
+                    CPIC_Logger::log( 'telegram', __( 'Automatic Telegram publish failed.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'error' => $tg_result->get_error_message() ) );
+                    // A transport failure has an ambiguous outcome; never blindly duplicate a message.
+                    return $this->handle_failure( $job_id, $tg_result->get_error_message(), 'tg_curl_error' === $tg_result->get_error_code() );
+                }
+                $queue->update( $job_id, array( 'telegram_message_id' => (string) ( $tg_result['message_id'] ?? '' ) ) );
+                $job = $queue->get_job( $job_id );
+                CPIC_Logger::log( 'telegram', __( 'Automatic Telegram message sent.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'message_id' => $job['telegram_message_id'] ) );
+            }
+        }
+
+        /* ── Stage 6: Complete ────────────────────────── */
+        $queue->update( $job_id, array( 'status' => 'published', 'last_error' => '', 'next_attempt_at' => 0 ) );
         CPIC_Logger::log( 'queue', __( 'Job completed.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'post_id' => $post_id ) );
 
         return true;
@@ -197,15 +208,16 @@ class CPIC_Publisher {
         $max      = (int) $job['max_retries'];
 
         $queue->bump_attempts( $job_id );
-        $queue->update( $job_id, array( 'last_error' => $error, 'status' => 'pending' ) );
 
         if ( $attempts > $max ) {
-            $queue->update( $job_id, array( 'status' => 'failed' ) );
+            $queue->update( $job_id, array( 'status' => 'failed', 'last_error' => $error ) );
             CPIC_Logger::log( 'queue', __( 'Job failed after retries.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'attempts' => $attempts, 'max' => $max, 'error' => $error ) );
             return false;
         }
 
-        CPIC_Logger::log( 'queue', __( 'Job scheduled for retry.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'attempts' => $attempts, 'max' => $max ) );
+        $delay = min( 21600, 60 * ( 2 ** min( 8, max( 0, $attempts - 1 ) ) ) );
+        $queue->update( $job_id, array( 'last_error' => $error, 'status' => 'pending', 'next_attempt_at' => time() + $delay ) );
+        CPIC_Logger::log( 'queue', __( 'Job scheduled for retry.', 'custom-post-image-creator' ), array( 'job_id' => $job_id, 'attempts' => $attempts, 'max' => $max, 'retry_in_seconds' => $delay ) );
         return false;
     }
 }

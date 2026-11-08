@@ -42,21 +42,12 @@ class CPIC_Queue {
 
         $existing = $this->get_job_by_post( $post_id );
         if ( $existing ) {
-            // Terminal successful job → do nothing.
-            if ( 'published' === $existing['status'] ) {
-                return $existing;
-            }
-            // A permanently failed job is reset so a re-publish retries.
-            if ( 'failed' === $existing['status'] ) {
-                $this->update( $existing['id'], array( 'status' => 'pending', 'attempts' => 0, 'last_error' => '' ) );
-                return $this->get_job( $existing['id'] );
-            }
-            // Anything else: reset to pending so cron picks it up again.
-            $this->update( $existing['id'], array( 'status' => 'pending', 'last_error' => '' ) );
-            return $this->get_job( $existing['id'] );
+            // Repeated publish hooks must never alter an active or completed job.
+            return $existing;
         }
 
-        $max_retries = (int) CPIC_Settings::get_single( 'cpic_max_retries', 3 );
+        $max_retries = max( 0, (int) CPIC_Settings::get_single( 'cpic_max_retries', 3 ) );
+        $delay = max( 0, (int) CPIC_Settings::get_single( 'cpic_auto_delay', 0 ) );
 
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery
         $inserted = $wpdb->insert(
@@ -68,15 +59,17 @@ class CPIC_Queue {
                 'status'        => 'pending',
                 'attempts'      => 0,
                 'max_retries'   => $max_retries,
+                'next_attempt_at' => time() + $delay,
                 'last_error'    => '',
                 'created_at'    => current_time( 'mysql' ),
                 'updated_at'    => current_time( 'mysql' ),
             ),
-            array( '%d', '%s', '%d', '%s', '%d', '%d', '%s', '%s', '%s' )
+            array( '%d', '%s', '%d', '%s', '%d', '%d', '%d', '%s', '%s', '%s' )
         );
 
         if ( false === $inserted ) {
-            return $existing ? $existing : null;
+            // A concurrent request may have won the unique job_key insert.
+            return $this->get_job_by_post( $post_id );
         }
 
         $job = $this->get_job( (int) $wpdb->insert_id );
@@ -140,8 +133,8 @@ class CPIC_Queue {
     }
 
     /**
-     * Jobs that are due for processing: pending, generated, publishing,
-     * or stuck in processing for over 5 minutes (stale recovery).
+     * Jobs that are due for processing: pending/generated jobs or stale
+     * processing/publishing claims (recovered after fifteen minutes).
      *
      * @param int $limit Row limit.
      * @return array
@@ -151,19 +144,19 @@ class CPIC_Queue {
         $table = self::table();
 
         // Stale processing threshold: 5 minutes ago.
-        $stale = gmdate( 'Y-m-d H:i:s', time() - 300 );
+        $stale = wp_date( 'Y-m-d H:i:s', time() - 900 );
 
         $sql = "SELECT * FROM {$table}
                 WHERE (
-                    status IN ('pending','generated','publishing')
-                    OR (status = 'processing' AND updated_at < %s)
+                    (status IN ('pending','generated') AND next_attempt_at <= %d)
+                    OR (status IN ('processing','publishing') AND updated_at < %s AND next_attempt_at <= %d)
                 )
                   AND attempts <= max_retries
                 ORDER BY id ASC
                 LIMIT %d";
 
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.NotPrepared
-        $rows = $wpdb->get_results( $wpdb->prepare( $sql, $stale, max( 1, (int) $limit ) ), ARRAY_A );
+        $rows = $wpdb->get_results( $wpdb->prepare( $sql, time(), $stale, time(), max( 1, (int) $limit ) ), ARRAY_A );
         return is_array( $rows ) ? $rows : array();
     }
 
@@ -214,6 +207,10 @@ class CPIC_Queue {
             'image_url'           => '%s',
             'facebook_post_id'    => '%s',
             'facebook_comment_id' => '%s',
+            'telegram_message_id' => '%s',
+            'auto_facebook'       => '%d',
+            'auto_telegram'       => '%d',
+            'next_attempt_at'     => '%d',
             'attempts'            => '%d',
             'max_retries'         => '%d',
             'last_error'          => '%s',
@@ -226,7 +223,7 @@ class CPIC_Queue {
             if ( ! isset( $fields[ $key ] ) ) {
                 continue;
             }
-            if ( 'attempts' === $key || 'template_id' === $key || 'max_retries' === $key ) {
+            if ( in_array( $key, array( 'attempts', 'template_id', 'max_retries', 'next_attempt_at', 'auto_facebook', 'auto_telegram' ), true ) ) {
                 $value = (int) $value;
             } else {
                 $value = (string) $value;
@@ -247,9 +244,39 @@ class CPIC_Queue {
         return false !== $result;
     }
 
-    /**
-     * Increment the attempt counter.
-     *
+    /** Atomically reset one failed job for a deliberate user retry. */
+    public function retry_failed_job( $job_id ) {
+        global $wpdb;
+        $table = self::table();
+        // Compare-and-swap: concurrent retry requests cannot reopen a claimed job.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+        $updated = $wpdb->query( $wpdb->prepare(
+            "UPDATE {$table} SET status = 'pending', attempts = 0, last_error = '', next_attempt_at = %d, updated_at = %s
+             WHERE id = %d AND status = 'failed'",
+            time(), current_time( 'mysql' ), (int) $job_id
+        ) );
+        return 1 === (int) $updated;
+    }
+
+    /** Atomically claim a due job, recovering only genuinely stale workers. */
+    public function claim_job( $job_id, $stale_after = 900 ) {
+        global $wpdb;
+        $table = self::table();
+        $stale = wp_date( 'Y-m-d H:i:s', time() - max( 60, (int) $stale_after ) );
+        $now = time();
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+        $claimed = $wpdb->query( $wpdb->prepare(
+            "UPDATE {$table} SET status = 'processing', updated_at = %s
+             WHERE id = %d AND next_attempt_at <= %d AND (
+                status IN ('pending','generated') OR
+                (status IN ('processing','publishing') AND updated_at < %s)
+             ) AND attempts <= max_retries",
+            current_time( 'mysql' ), (int) $job_id, $now, $stale
+        ) );
+        return 1 === (int) $claimed;
+    }
+
+    /** Increment the attempt counter.
      * @param int $job_id Job ID.
      * @return bool
      */
@@ -282,8 +309,24 @@ class CPIC_Queue {
     public function delete_job( $job_id ) {
         global $wpdb;
         $table = self::table();
+        $job = $this->get_job( $job_id );
+        // Atomic condition prevents deleting an active claim between a UI check and this request.
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery
-        return (bool) $wpdb->delete( $table, array( 'id' => (int) $job_id ), array( '%d' ) );
+        $deleted = $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE id = %d AND status NOT IN ('processing','publishing')", (int) $job_id ) );
+        if ( 1 === (int) $deleted && $job && ! empty( $job['image_path'] ) ) {
+            $this->cleanup_generated_image( $job['image_path'] );
+        }
+        return 1 === (int) $deleted;
+    }
+
+    /** Delete only plugin-owned generated PNGs (never arbitrary paths). */
+    private function cleanup_generated_image( $path ) {
+        $upload = wp_upload_dir();
+        $root = realpath( trailingslashit( $upload['basedir'] ) . 'cpic-generated' );
+        $file = realpath( (string) $path );
+        if ( $root && $file && 0 === strpos( $file, trailingslashit( $root ) ) && '.png' === strtolower( substr( $file, -4 ) ) && 0 === strpos( basename( $file ), 'cpic-' ) ) {
+            wp_delete_file( $file );
+        }
     }
 
     /**

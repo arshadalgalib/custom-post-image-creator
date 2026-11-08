@@ -3,7 +3,7 @@
  * Plugin Name: Custom Post Image Creator
  * Plugin URI:  https://developer.wordpress.org/plugins/
  * Description: Fully automatic, category-driven dynamic photocard generation and Facebook publishing. Generates social media photocards (1080×1080) with Bengali typography support, publishes them to Facebook Pages, and posts the article URL as the first comment. Includes template manager, category mapping, persistent job queue, and admin dashboard.
- * Version:     6.1.0
+ * Version:     6.4.0
  * Author:      CPIC Dev Team
  * Author URI:  https://developer.wordpress.org/
  * License:     GPL-2.0-or-later
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /* ─── Constants ─────────────────────────────────────────────── */
-define( 'CPIC_VERSION', '6.3.0' );
+define( 'CPIC_VERSION', '6.4.0' );
 define( 'CPIC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'CPIC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'CPIC_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );

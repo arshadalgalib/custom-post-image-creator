@@ -74,10 +74,11 @@ class CPIC_Settings {
         'cpic_auto_delay'        => 0,  // seconds after publish
 
         /* New automation system */
-        'cpic_auto_generate'     => 1,  // enable full automatic pipeline
+        'cpic_auto_generate'     => 0,  // explicit opt-in to the automatic pipeline
         'cpic_auto_comment'      => 1,  // post article URL as first comment
         'cpic_max_retries'       => 3,  // retry count
         'cpic_default_template_id' => 0,
+        'cpic_delete_data_on_uninstall' => 0,
     );
 
     /**
@@ -88,7 +89,12 @@ class CPIC_Settings {
      * @return mixed
      */
     public static function get_single( $key, $default = '' ) {
-        return get_option( $key, $default );
+        $value = get_option( $key, false );
+        if ( false === $value && 'cpic_auto_generate' === $key ) {
+            // Preserve the old master switch even before the admin upgrade hook runs.
+            return get_option( 'cpic_auto_publish', $default );
+        }
+        return false === $value ? $default : $value;
     }
 
     /**
@@ -163,7 +169,7 @@ class CPIC_Settings {
             'cpic_auto_publish',   'cpic_auto_fb', 'cpic_auto_tg',
             'cpic_auto_delay',
             'cpic_auto_generate',  'cpic_auto_comment', 'cpic_max_retries',
-            'cpic_default_template_id',
+            'cpic_default_template_id', 'cpic_delete_data_on_uninstall',
         );
 
         $fields_url = array( 'cpic_logo', 'cpic_active_background' );
@@ -183,7 +189,11 @@ class CPIC_Settings {
 
         foreach ( $fields_int as $f ) {
             if ( isset( $_POST[ $f ] ) ) {
-                $this->set( $f, $sec->sanitize_int( $_POST[ $f ] ) );
+                $value = $sec->sanitize_int( $_POST[ $f ] );
+                if ( 'cpic_auto_delay' === $f ) { $value = max( 0, min( 3600, $value ) ); }
+                if ( 'cpic_max_retries' === $f ) { $value = max( 0, min( 10, $value ) ); }
+                if ( in_array( $f, array( 'cpic_auto_publish', 'cpic_auto_fb', 'cpic_auto_tg', 'cpic_auto_generate', 'cpic_auto_comment', 'cpic_delete_data_on_uninstall' ), true ) ) { $value = $value ? 1 : 0; }
+                $this->set( $f, $value );
             }
         }
 

@@ -45,6 +45,11 @@ class CPIC_Template_Manager {
 
         $merged          = array_merge( $base, $config );
         $merged['canvas'] = array_merge( $base['canvas'], isset( $config['canvas'] ) && is_array( $config['canvas'] ) ? $config['canvas'] : array() );
+        // Bound dimensions to a practical range to prevent malformed imports exhausting memory.
+        $merged['canvas']['width'] = max( 64, min( 4096, absint( $merged['canvas']['width'] ) ) );
+        $merged['canvas']['height'] = max( 64, min( 4096, absint( $merged['canvas']['height'] ) ) );
+        $merged['canvas']['padding'] = max( 0, min( 512, absint( $merged['canvas']['padding'] ) ) );
+        $merged['canvas']['background_type'] = in_array( $merged['canvas']['background_type'], array( 'gradient', 'color', 'image' ), true ) ? $merged['canvas']['background_type'] : 'gradient';
 
         // Caption composition is template-specific. Keep the historical
         // behaviour (first paragraph on, headline off) for existing and new
@@ -63,6 +68,26 @@ class CPIC_Template_Manager {
         foreach ( $base['elements'] as $key => $default ) {
             if ( isset( $config['elements'][ $key ] ) && is_array( $config['elements'][ $key ] ) ) {
                 $merged['elements'][ $key ] = array_merge( $default, $config['elements'][ $key ] );
+                $merged['elements'][ $key ]['font_size'] = max( 1, min( 500, absint( $merged['elements'][ $key ]['font_size'] ?? 28 ) ) );
+                if ( isset( $merged['elements'][ $key ]['min_font_size'] ) ) { $merged['elements'][ $key ]['min_font_size'] = max( 1, min( 500, absint( $merged['elements'][ $key ]['min_font_size'] ) ) ); }
+                if ( isset( $merged['elements'][ $key ]['max_font_size'] ) ) { $merged['elements'][ $key ]['max_font_size'] = max( 1, min( 500, absint( $merged['elements'][ $key ]['max_font_size'] ) ) ); }
+                if ( isset( $merged['elements'][ $key ]['max_width'] ) ) { $merged['elements'][ $key ]['max_width'] = max( 1, min( 4096, absint( $merged['elements'][ $key ]['max_width'] ) ) ); }
+                if ( isset( $merged['elements'][ $key ]['max_lines'] ) ) { $merged['elements'][ $key ]['max_lines'] = max( 1, min( 30, absint( $merged['elements'][ $key ]['max_lines'] ) ) ); }
+                if ( isset( $merged['elements'][ $key ]['line_height'] ) ) { $merged['elements'][ $key ]['line_height'] = max( 0.8, min( 3.0, (float) $merged['elements'][ $key ]['line_height'] ) ); }
+                if ( isset( $merged['elements'][ $key ]['letter_spacing'] ) ) { $merged['elements'][ $key ]['letter_spacing'] = max( -10, min( 50, (float) $merged['elements'][ $key ]['letter_spacing'] ) ); }
+                foreach ( array( 'x', 'y' ) as $position_key ) {
+                    if ( isset( $merged['elements'][ $key ][ $position_key ] ) ) { $merged['elements'][ $key ][ $position_key ] = max( 0, min( 4096, absint( $merged['elements'][ $key ][ $position_key ] ) ) ); }
+                }
+                foreach ( array( 'width', 'height' ) as $dimension_key ) {
+                    if ( isset( $merged['elements'][ $key ][ $dimension_key ] ) ) { $merged['elements'][ $key ][ $dimension_key ] = max( 0, min( 4096, absint( $merged['elements'][ $key ][ $dimension_key ] ) ) ); }
+                }
+                foreach ( array( 'padding_x', 'padding_y' ) as $padding_key ) {
+                    if ( isset( $merged['elements'][ $key ][ $padding_key ] ) ) { $merged['elements'][ $key ][ $padding_key ] = max( 0, min( 512, absint( $merged['elements'][ $key ][ $padding_key ] ) ) ); }
+                }
+                if ( isset( $merged['elements'][ $key ]['border_radius'] ) ) { $merged['elements'][ $key ]['border_radius'] = max( 0, min( 2048, absint( $merged['elements'][ $key ]['border_radius'] ) ) ); }
+                if ( isset( $merged['elements'][ $key ]['max_height'] ) ) { $merged['elements'][ $key ]['max_height'] = max( 0, min( 4096, absint( $merged['elements'][ $key ]['max_height'] ) ) ); }
+                if ( isset( $merged['elements'][ $key ]['opacity'] ) ) { $merged['elements'][ $key ]['opacity'] = max( 0, min( 100, absint( $merged['elements'][ $key ]['opacity'] ) ) ); }
+                if ( isset( $merged['elements'][ $key ]['shadow_offset'] ) ) { $merged['elements'][ $key ]['shadow_offset'] = max( 0, min( 100, absint( $merged['elements'][ $key ]['shadow_offset'] ) ) ); }
             } else {
                 $merged['elements'][ $key ] = $default;
             }
@@ -158,9 +183,13 @@ class CPIC_Template_Manager {
         }
 
         if ( isset( $data['slug'] ) ) {
-            $slug   = sanitize_title( $data['slug'] );
-            $update['slug'] = $slug ? $slug : $existing['slug'];
-            $fmt[]  = '%s';
+            $slug = sanitize_title( $data['slug'] );
+            if ( $slug ) {
+                $collision = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE slug = %s AND id != %d LIMIT 1", $slug, $id ) );
+                if ( $collision ) { return false; }
+                $update['slug'] = $slug;
+                $fmt[] = '%s';
+            }
         }
 
         if ( isset( $data['config'] ) ) {

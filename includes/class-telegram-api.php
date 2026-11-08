@@ -28,8 +28,8 @@ class CPIC_Telegram_API {
         cpic()->security->verify_ajax_request();
 
         $post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0;
-        if ( ! $post_id || ! get_post( $post_id ) ) {
-            wp_send_json_error( array( 'message' => __( 'Invalid post.', 'custom-post-image-creator' ) ) );
+        if ( ! $post_id || ! get_post( $post_id ) || ! current_user_can( 'edit_post', $post_id ) || 'publish' !== get_post_status( $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Invalid post or permission denied.', 'custom-post-image-creator' ) ), 403 );
         }
 
         // Server-side template generation (bypasses client-side canvas).
@@ -43,23 +43,16 @@ class CPIC_Telegram_API {
             }
         }
 
-        // Fallback: legacy generate when no template resolved.
-        if ( empty( $generated_path ) || ! file_exists( $generated_path ) ) {
-            $img = cpic()->image_generator->generate( $post_id );
-            if ( ! is_wp_error( $img ) ) {
-                $generated_path = $img['path'];
-            }
-        }
-
         if ( empty( $generated_path ) || ! file_exists( $generated_path ) ) {
             wp_send_json_error( array( 'message' => __( 'Could not generate photocard image.', 'custom-post-image-creator' ) ) );
         }
 
-        $result = $this->share( $post_id, $generated_path );
-
-        // Remove generated temp file.
-        if ( $generated_path && file_exists( $generated_path ) ) {
-            wp_delete_file( $generated_path );
+        try {
+            $result = $this->share( $post_id, $generated_path );
+        } finally {
+            if ( $generated_path && file_exists( $generated_path ) ) {
+                cpic()->image_generator->cleanup( $generated_path );
+            }
         }
 
         if ( is_wp_error( $result ) ) {
@@ -67,103 +60,6 @@ class CPIC_Telegram_API {
         }
 
         wp_send_json_success( $result );
-    }
-
-    /**
-     * Create a temp PNG file from a canvas data URL.
-     *
-     * @param string $data_url Canvas data URL.
-     * @param int    $post_id  Post ID.
-     * @return string|WP_Error
-     */
-    private function create_temp_png_from_data_url( $data_url, $post_id ) {
-        $data_url = trim( (string) $data_url );
-        if ( empty( $data_url ) || strpos( $data_url, 'data:image/png;base64,' ) !== 0 ) {
-            return new WP_Error( 'tg_canvas_invalid', __( 'Invalid canvas data.', 'custom-post-image-creator' ) );
-        }
-
-        $raw = substr( $data_url, strlen( 'data:image/png;base64,' ) );
-        $bin = base64_decode( str_replace( ' ', '+', $raw ), true );
-        if ( false === $bin ) {
-            return new WP_Error( 'tg_canvas_decode', __( 'Could not decode canvas image.', 'custom-post-image-creator' ) );
-        }
-
-        $filename = 'cpic-canvas-' . $post_id . '-' . time() . '.png';
-        $saved    = wp_upload_bits( $filename, null, $bin );
-
-        if ( ! empty( $saved['error'] ) ) {
-            return new WP_Error( 'tg_canvas_save', $saved['error'] );
-        }
-
-        return $saved['file'];
-    }
-
-    /**
-     * Store uploaded preview canvas file in uploads.
-     *
-     * @param array $file    Uploaded file array.
-     * @param int   $post_id Post ID.
-     * @return string|WP_Error
-     */
-    private function create_temp_png_from_upload( $file, $post_id ) {
-        if ( empty( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) ) {
-            return new WP_Error( 'tg_canvas_upload', __( 'Invalid uploaded canvas file.', 'custom-post-image-creator' ) );
-        }
-
-        $filename = 'cpic-canvas-' . $post_id . '-' . time() . '.png';
-        $bits     = wp_upload_bits( $filename, null, file_get_contents( $file['tmp_name'] ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- uploaded temp file
-
-        if ( ! empty( $bits['error'] ) ) {
-            return new WP_Error( 'tg_canvas_save', $bits['error'] );
-        }
-
-        return $bits['file'];
-    }
-
-    /**
-     * Sanitize image settings overrides sent from the admin UI.
-     *
-     * @param array $settings Raw settings.
-     * @return array
-     */
-    private function sanitize_settings_overrides( $settings ) {
-        $clean      = array();
-        $text_keys  = array( 'cpic_title_font', 'cpic_date_font', 'cpic_comment_message' );
-        $color_keys = array( 'cpic_title_color', 'cpic_date_color', 'cpic_date_bg_color' );
-        $int_keys   = array(
-            'cpic_title_size', 'cpic_title_offset_x', 'cpic_title_offset_y',
-            'cpic_date_offset_x', 'cpic_date_offset_y',
-            'cpic_logo_width', 'cpic_logo_offset_x', 'cpic_logo_offset_y',
-            'cpic_feat_offset_x', 'cpic_feat_offset_y', 'cpic_feat_width', 'cpic_feat_height',
-            'cpic_canvas_width', 'cpic_canvas_height',
-        );
-        $url_keys   = array( 'cpic_logo', 'cpic_active_background' );
-
-        foreach ( $text_keys as $key ) {
-            if ( isset( $settings[ $key ] ) ) {
-                $clean[ $key ] = sanitize_text_field( $settings[ $key ] );
-            }
-        }
-
-        foreach ( $color_keys as $key ) {
-            if ( isset( $settings[ $key ] ) ) {
-                $clean[ $key ] = sanitize_hex_color( $settings[ $key ] ) ?: '';
-            }
-        }
-
-        foreach ( $int_keys as $key ) {
-            if ( isset( $settings[ $key ] ) ) {
-                $clean[ $key ] = intval( $settings[ $key ] );
-            }
-        }
-
-        foreach ( $url_keys as $key ) {
-            if ( isset( $settings[ $key ] ) ) {
-                $clean[ $key ] = esc_url_raw( $settings[ $key ] );
-            }
-        }
-
-        return $clean;
     }
 
     /* ─── AJAX: test connection ───────────────────────── */
@@ -183,9 +79,10 @@ class CPIC_Telegram_API {
             wp_send_json_error( array( 'message' => $response->get_error_message() ) );
         }
 
+        $http_code = (int) wp_remote_retrieve_response_code( $response );
         $body = json_decode( wp_remote_retrieve_body( $response ), true );
 
-        if ( empty( $body['ok'] ) ) {
+        if ( $http_code < 200 || $http_code >= 300 || ! is_array( $body ) || empty( $body['ok'] ) ) {
             wp_send_json_error( array( 'message' => $body['description'] ?? __( 'Connection failed.', 'custom-post-image-creator' ) ) );
         }
 
@@ -222,11 +119,10 @@ class CPIC_Telegram_API {
         $generated_path = '';
         if ( empty( $image_path ) || ! file_exists( $image_path ) ) {
             $tpl = cpic()->category_mapper->resolve_template_for_post( $post_id );
-            if ( $tpl && ! empty( $tpl['config'] ) ) {
-                $img = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
-            } else {
-                $img = cpic()->image_generator->generate( $post_id );
+            if ( ! $tpl || empty( $tpl['config'] ) ) {
+                return new WP_Error( 'tg_template_missing', __( 'No active template is available for this post.', 'custom-post-image-creator' ) );
             }
+            $img = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
             if ( is_wp_error( $img ) ) {
                 return $img;
             }
@@ -239,6 +135,21 @@ class CPIC_Telegram_API {
 
         // Send photo via cURL with CURLFile for reliable binary handling.
         $url = self::API_BASE . $token . '/sendPhoto';
+
+        $lock_key = 'cpic_tg_publish_lock_' . (int) $post_id;
+        $lock_value = (string) time();
+        $existing_lock = get_option( $lock_key, false );
+        if ( $existing_lock ) {
+            if ( $generated_path ) { cpic()->image_generator->cleanup( $generated_path ); }
+            $message = ( time() - (int) $existing_lock ) > 300
+                ? __( 'A previous Telegram request has an ambiguous outcome. Check the destination before clearing its delivery lock.', 'custom-post-image-creator' )
+                : __( 'A Telegram publication for this post is already in progress.', 'custom-post-image-creator' );
+            return new WP_Error( 'tg_busy', $message );
+        }
+        if ( ! add_option( $lock_key, $lock_value, '', false ) ) {
+            if ( $generated_path ) { cpic()->image_generator->cleanup( $generated_path ); }
+            return new WP_Error( 'tg_busy', __( 'A Telegram publication for this post is already in progress.', 'custom-post-image-creator' ) );
+        }
 
         $ch = curl_init( $url );
         curl_setopt( $ch, CURLOPT_POST, true );
@@ -254,54 +165,76 @@ class CPIC_Telegram_API {
         curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, true );
         $raw_response = curl_exec( $ch );
         $curl_error   = curl_error( $ch );
+        $http_code    = (int) curl_getinfo( $ch, CURLINFO_HTTP_CODE );
         curl_close( $ch );
 
-        // Cleanup (only if we generated it).
-        if ( $generated_path ) {
-            cpic()->image_generator->cleanup( $generated_path );
-        }
-
+        if ( $generated_path ) { cpic()->image_generator->cleanup( $generated_path ); }
         if ( $curl_error ) {
-            CPIC_Security::log( 'telegram', 'cURL error', $curl_error );
-            return new WP_Error( 'tg_curl_error', $curl_error );
+            // Keep the lock after an ambiguous transport outcome to avoid a duplicate message.
+            CPIC_Logger::log( 'telegram', __( 'Telegram transport failed; outcome is ambiguous.', 'custom-post-image-creator' ), array( 'post_id' => (int) $post_id ) );
+            return new WP_Error( 'tg_curl_error', __( 'Telegram request failed at the transport layer; check the channel before retrying.', 'custom-post-image-creator' ) );
         }
 
-        $resp_body = json_decode( $raw_response, true );
-
-        if ( empty( $resp_body['ok'] ) ) {
-            CPIC_Security::log( 'telegram', 'API error', $resp_body );
-            return new WP_Error( 'tg_api_error', $resp_body['description'] ?? __( 'Telegram API error.', 'custom-post-image-creator' ) );
+        $resp_body = json_decode( (string) $raw_response, true );
+        if ( $http_code < 200 || $http_code >= 300 || ! is_array( $resp_body ) || empty( $resp_body['ok'] ) || empty( $resp_body['result']['message_id'] ) ) {
+            delete_option( $lock_key );
+            $description = is_array( $resp_body ) && ! empty( $resp_body['description'] ) ? sanitize_text_field( $resp_body['description'] ) : __( 'Telegram returned an invalid response.', 'custom-post-image-creator' );
+            CPIC_Logger::log( 'telegram', __( 'Telegram API rejected the photo request.', 'custom-post-image-creator' ), array( 'post_id' => (int) $post_id, 'http_code' => $http_code, 'description' => $description ) );
+            return new WP_Error( 'tg_api_error', $description );
         }
 
+        $message_id = (string) $resp_body['result']['message_id'];
         update_post_meta( $post_id, 'cpic_last_shared_to_telegram', current_time( 'mysql' ) );
+        update_post_meta( $post_id, 'cpic_telegram_message_id', $message_id );
+        delete_option( $lock_key );
 
         return array(
             'message'    => __( 'Sent to Telegram.', 'custom-post-image-creator' ),
-            'message_id' => $resp_body['result']['message_id'] ?? '',
+            'message_id' => $message_id,
         );
     }
 
     /* ─── Caption builder ─────────────────────────────── */
 
     private function build_caption( $post_id ) {
-        $title     = get_the_title( $post_id );
-        $comment   = cpic()->settings->get( 'cpic_comment_message' );
-        $permalink = get_permalink( $post_id );
-
-        // Escape for HTML parse mode so titles containing &, <, > do not break the API.
-        $title   = htmlspecialchars( $title, ENT_QUOTES, 'UTF-8' );
-        $comment = htmlspecialchars( $comment, ENT_QUOTES, 'UTF-8' );
-
+        $title = wp_strip_all_tags( (string) get_the_title( $post_id ) );
+        $comment = wp_strip_all_tags( (string) cpic()->settings->get( 'cpic_comment_message' ) );
+        $permalink = (string) get_permalink( $post_id );
+        // Reserve room for the URL and separators first, then the optional message, then the title.
+        $permalink = $this->utf8_slice( $permalink, 900 );
+        $remaining = max( 0, 1024 - $this->utf8_length( $permalink ) - 3 );
+        $comment = $this->utf8_slice( $comment, min( 300, max( 0, $remaining ) ) );
+        $remaining = max( 0, $remaining - $this->utf8_length( $comment ) );
+        $title = $this->utf8_slice( $title, $remaining );
         $caption = $title . "\n\n" . $comment . "\n" . $permalink;
 
-        // Telegram caption limit.
-        if ( mb_strlen( $caption, 'UTF-8' ) > 1024 ) {
-            $allowed = 1024 - mb_strlen( "\n\n" . $comment . "\n" . $permalink, 'UTF-8' );
-            $title   = mb_substr( $title, 0, max( $allowed, 10 ), 'UTF-8' ) . '…';
-            $caption = $title . "\n\n" . $comment . "\n" . $permalink;
-        }
+        // Escape only after truncation to avoid cutting through an HTML entity.
+        return htmlspecialchars( $caption, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8' );
+    }
 
-        return $caption;
+    /** Count Unicode code points without requiring the optional mbstring extension. */
+    private function utf8_length( $value ) {
+        if ( function_exists( 'mb_strlen' ) ) { return mb_strlen( $value, 'UTF-8' ); }
+        if ( preg_match_all( '/./us', (string) $value, $matches ) ) { return count( $matches[0] ); }
+        return strlen( (string) $value );
+    }
+
+    /** Truncate on grapheme boundaries while respecting a code-point limit. */
+    private function utf8_slice( $value, $length ) {
+        $length = max( 0, (int) $length );
+        if ( preg_match_all( '/\\X/u', (string) $value, $matches ) ) {
+            $result = '';
+            $used = 0;
+            foreach ( $matches[0] as $grapheme ) {
+                $points = preg_match_all( '/./us', $grapheme, $point_matches );
+                if ( false === $points || $used + $points > $length ) { break; }
+                $result .= $grapheme;
+                $used += $points;
+            }
+            return $result;
+        }
+        if ( function_exists( 'mb_substr' ) ) { return mb_substr( $value, 0, $length, 'UTF-8' ); }
+        return substr( (string) $value, 0, $length );
     }
 
 }

@@ -45,6 +45,11 @@ class CPIC_Automation {
      * Schedule the recurring worker once.
      */
     public function maybe_schedule_cron() {
+        // Retire the option-backed legacy event once; old option data is left untouched.
+        if ( ! get_option( 'cpic_legacy_queue_event_cleared', false ) ) {
+            wp_clear_scheduled_hook( 'cpic_cron_process_queue' );
+            update_option( 'cpic_legacy_queue_event_cleared', 1, false );
+        }
         if ( ! wp_next_scheduled( 'cpic_cron_process_jobs' ) ) {
             wp_schedule_event( time(), 'cpic_every_minute', 'cpic_cron_process_jobs' );
         }
@@ -58,7 +63,7 @@ class CPIC_Automation {
         if ( ! is_admin() ) {
             return;
         }
-        if ( ! CPIC_Settings::get_single( 'cpic_auto_generate', 1 ) ) {
+        if ( ! CPIC_Settings::get_single( 'cpic_auto_generate', 0 ) ) {
             return;
         }
         $last = get_option( 'cpic_last_cron_run', 0 );
@@ -66,7 +71,7 @@ class CPIC_Automation {
             return;
         }
         update_option( 'cpic_last_cron_run', time(), false );
-        $this->process_due_jobs( 10 );
+        $this->process_due_jobs( 1 );
     }
 
     /**
@@ -86,7 +91,7 @@ class CPIC_Automation {
             return;
         }
 
-        if ( ! CPIC_Settings::get_single( 'cpic_auto_generate', 1 ) ) {
+        if ( ! CPIC_Settings::get_single( 'cpic_auto_generate', 0 ) ) {
             return;
         }
 
@@ -102,10 +107,8 @@ class CPIC_Automation {
         }
 
         // Schedule immediate processing via single event (safe for shared hosting).
-        wp_schedule_single_event( time() + 5, 'cpic_process_single_job', array( $post->ID ) );
+        wp_schedule_single_event( time() + max( 5, (int) CPIC_Settings::get_single( 'cpic_auto_delay', 0 ) ), 'cpic_process_single_job', array( $post->ID ) );
 
-        // Backup: also run via init on next page load if cron fails.
-        update_option( 'cpic_pending_process', $post->ID, false );
     }
 
     /**
@@ -114,6 +117,9 @@ class CPIC_Automation {
      * @param int $post_id Post ID.
      */
     public function process_single_post( $post_id ) {
+        if ( ! CPIC_Settings::get_single( 'cpic_auto_generate', 0 ) ) {
+            return;
+        }
         $job = cpic()->queue->create_job( $post_id );
         if ( ! $job ) {
             return;
@@ -129,8 +135,8 @@ class CPIC_Automation {
      *
      * @param int $limit Maximum jobs per tick.
      */
-    public function process_due_jobs( $limit = 25 ) {
-        if ( ! CPIC_Settings::get_single( 'cpic_auto_generate', 1 ) ) {
+    public function process_due_jobs( $limit = 1 ) {
+        if ( ! CPIC_Settings::get_single( 'cpic_auto_generate', 0 ) ) {
             return;
         }
 
@@ -144,12 +150,6 @@ class CPIC_Automation {
             // Re-fetch so two concurrent ticks never process the same job.
             $fresh = cpic()->queue->get_job( (int) $job['id'] );
             if ( ! $fresh || 'published' === $fresh['status'] ) {
-                continue;
-            }
-            // Skip if another process is actively working on it (updated in
-            // the last 3 minutes — a publish call can take up to 120s, so a
-            // fresh 'publishing' job must never be picked up a second time).
-            if ( in_array( $fresh['status'], array( 'processing', 'publishing' ), true ) && strtotime( $fresh['updated_at'] ) > ( time() - 180 ) ) {
                 continue;
             }
             cpic()->publisher->process_job( $fresh );

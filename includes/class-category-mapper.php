@@ -61,35 +61,38 @@ class CPIC_Category_Mapper {
      * @return array|null Template record (with config) or null.
      */
     public function resolve_template_for_post( $post_id ) {
+        $mapping = $this->get_active_mapping_for_post( $post_id );
+        if ( $mapping ) {
+            $template = CPIC_Template_Manager::get_template( (int) $mapping['template_id'] );
+            if ( $template && ! empty( $template['is_active'] ) ) {
+                return $template;
+            }
+        }
+        return CPIC_Template_Manager::get_default_template();
+    }
+
+    /** Return the highest-priority mapping whose template is currently active. */
+    private function get_active_mapping_for_post( $post_id ) {
         $categories = wp_get_post_categories( $post_id );
         if ( empty( $categories ) || is_wp_error( $categories ) ) {
-            return CPIC_Template_Manager::get_default_template();
+            return null;
         }
-
-        $best_mapping = null;
-        $best_priority = PHP_INT_MAX;
-
+        $mappings = array();
         foreach ( $categories as $term_id ) {
             $mapping = $this->get_mapping( $term_id );
-            if ( ! $mapping ) {
-                continue;
-            }
-
-            $priority = (int) $mapping['priority'];
-            if ( $priority < $best_priority ) {
-                $best_priority = $priority;
-                $best_mapping  = $mapping;
+            if ( $mapping ) { $mappings[] = $mapping; }
+        }
+        usort( $mappings, function ( $left, $right ) {
+            $priority_cmp = (int) $left['priority'] <=> (int) $right['priority'];
+            return 0 !== $priority_cmp ? $priority_cmp : ( (int) $left['term_id'] <=> (int) $right['term_id'] );
+        } );
+        foreach ( $mappings as $mapping ) {
+            $template = CPIC_Template_Manager::get_template( (int) $mapping['template_id'] );
+            if ( $template && ! empty( $template['is_active'] ) ) {
+                return $mapping;
             }
         }
-
-        if ( $best_mapping ) {
-            $tpl = CPIC_Template_Manager::get_template( (int) $best_mapping['template_id'] );
-            if ( $tpl && ! empty( $tpl['is_active'] ) ) {
-                return $tpl;
-            }
-        }
-
-        return CPIC_Template_Manager::get_default_template();
+        return null;
     }
 
     /**
@@ -125,27 +128,8 @@ class CPIC_Category_Mapper {
      * @return int
      */
     public function resolve_selected_term_id( $post_id ) {
-        $categories = wp_get_post_categories( $post_id );
-        if ( empty( $categories ) || is_wp_error( $categories ) ) {
-            return 0;
-        }
-
-        $best_mapping = null;
-        $best_priority = PHP_INT_MAX;
-
-        foreach ( $categories as $term_id ) {
-            $mapping = $this->get_mapping( $term_id );
-            if ( ! $mapping ) {
-                continue;
-            }
-            $priority = (int) $mapping['priority'];
-            if ( $priority < $best_priority ) {
-                $best_priority = $priority;
-                $best_mapping  = $mapping;
-            }
-        }
-
-        return $best_mapping ? (int) $best_mapping['term_id'] : 0;
+        $mapping = $this->get_active_mapping_for_post( $post_id );
+        return $mapping ? (int) $mapping['term_id'] : 0;
     }
 
     /* ─── Write ────────────────────────────────────────── */
@@ -166,7 +150,9 @@ class CPIC_Category_Mapper {
         $template_id = (int) $template_id;
         $priority    = max( 1, (int) $priority );
 
-        if ( ! $term_id || ! $template_id ) {
+        $template = CPIC_Template_Manager::get_template( $template_id );
+        $term = get_term( $term_id, 'category' );
+        if ( ! $term_id || ! $template_id || ! $template || empty( $template['is_active'] ) || ! $term || is_wp_error( $term ) ) {
             return false;
         }
 

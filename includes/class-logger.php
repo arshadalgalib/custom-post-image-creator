@@ -24,6 +24,8 @@ class CPIC_Logger {
         global $wpdb;
         $table = $wpdb->prefix . 'cpic_logs';
 
+        $context = self::redact( $context );
+        $message = self::redact( (string) $message );
         $data = array(
             'log_type'   => sanitize_text_field( $type ),
             'message'    => sanitize_textarea_field( $message ),
@@ -51,7 +53,33 @@ class CPIC_Logger {
             }
         }
 
-        $wpdb->insert( $table, $data, array( '%s', '%s', '%s', '%s' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+        $formats = array_fill( 0, count( $data ), '%s' );
+        $wpdb->insert( $table, $data, $formats ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+    }
+
+    /** Recursively remove credential values before persistence. */
+    private static function redact( $value, $key = '' ) {
+        if ( is_array( $value ) ) {
+            $clean = array();
+            foreach ( $value as $child_key => $child ) {
+                $clean[ $child_key ] = self::redact( $child, (string) $child_key );
+            }
+            return $clean;
+        }
+        if ( is_object( $value ) ) {
+            return self::redact( (array) $value, $key );
+        }
+        if ( preg_match( '/token|secret|authorization|password|credential/i', $key ) ) {
+            return '[REDACTED]';
+        }
+        if ( ! is_string( $value ) ) {
+            return $value;
+        }
+        $value = preg_replace( '/(access_token=)[^&\s]+/i', '$1[REDACTED]', $value );
+        $value = preg_replace( '#(/bot)\d+:[A-Za-z0-9_-]+#', '$1[REDACTED]', $value );
+        $value = preg_replace( '/\bEAA[A-Za-z0-9]{20,}\b/', '[REDACTED]', $value );
+        $value = preg_replace( '/(Bearer\s+)[A-Za-z0-9._~-]+/i', '$1[REDACTED]', $value );
+        return $value;
     }
 
     /**

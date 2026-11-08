@@ -185,222 +185,6 @@ if ( ! defined( 'ABSPATH' ) ) {
         <div id="cpic-pagination" class="cpic-pagination"></div>
     </div>
 
-    <!-- ============================================================ -->
-    <!-- SECTION 3: Customize Image                                   -->
-    <!-- ============================================================ -->
-    <?php /* Legacy global image editor; visual settings now live per template. */ if ( false ) : ?>
-    <div class="cpic-section cpic-customize">
-        <h2><?php esc_html_e( 'Customize Image', 'custom-post-image-creator' ); ?></h2>
-
-        <div class="cpic-row">
-
-            <!-- Canvas size -->
-            <div class="cpic-col cpic-card">
-                <h3><?php esc_html_e( 'Canvas Size', 'custom-post-image-creator' ); ?></h3>
-                <label><?php esc_html_e( 'Width (px)', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_canvas_width" min="200" max="4096" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_canvas_width' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'Height (px)', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_canvas_height" min="200" max="4096" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_canvas_height' ) ); ?>" />
-                </label>
-            </div>
-
-            <!-- Title controls -->
-            <div class="cpic-col cpic-card">
-                <h3><?php esc_html_e( 'Title Text', 'custom-post-image-creator' ); ?></h3>
-                <label><?php esc_html_e( 'Font Family', 'custom-post-image-creator' ); ?>
-                    <select id="cpic_title_font">
-                        <option value="Noto Serif Bengali" <?php selected( cpic()->settings->get( 'cpic_title_font' ), 'Noto Serif Bengali' ); ?>>Noto Serif Bengali</option>
-                        <option value="Hind Siliguri" <?php selected( cpic()->settings->get( 'cpic_title_font' ), 'Hind Siliguri' ); ?>>Hind Siliguri</option>
-                        <option value="SolaimanLipi" <?php selected( cpic()->settings->get( 'cpic_title_font' ), 'SolaimanLipi' ); ?>>SolaimanLipi</option>
-                        <option value="Siyam Rupali" <?php selected( cpic()->settings->get( 'cpic_title_font' ), 'Siyam Rupali' ); ?>>Siyam Rupali</option>
-                    </select>
-                </label>
-                <label><?php esc_html_e( 'Font Size', 'custom-post-image-creator' ); ?>
-                    <input type="range" id="cpic_title_size" min="20" max="100" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_title_size' ) ); ?>" />
-                    <span id="cpic_title_size_val"><?php echo esc_html( cpic()->settings->get( 'cpic_title_size' ) ); ?>px</span>
-                </label>
-                <label><?php esc_html_e( 'Title Color', 'custom-post-image-creator' ); ?>
-                    <input type="text" id="cpic_title_color" class="cpic-color-picker" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_title_color' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'X Offset', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_title_offset_x" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_title_offset_x' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'Y Offset', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_title_offset_y" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_title_offset_y' ) ); ?>" />
-                </label>
-            </div>
-
-            <!-- Date controls -->
-            <div class="cpic-col cpic-card">
-                <h3><?php esc_html_e( 'Date', 'custom-post-image-creator' ); ?></h3>
-                <label><?php esc_html_e( 'Font', 'custom-post-image-creator' ); ?>
-                    <select id="cpic_date_font">
-                        <option value="Noto Serif Bengali" <?php selected( cpic()->settings->get( 'cpic_date_font' ), 'Noto Serif Bengali' ); ?>>Noto Serif Bengali</option>
-                        <option value="Hind Siliguri" <?php selected( cpic()->settings->get( 'cpic_date_font' ), 'Hind Siliguri' ); ?>>Hind Siliguri</option>
-                        <option value="SolaimanLipi" <?php selected( cpic()->settings->get( 'cpic_date_font' ), 'SolaimanLipi' ); ?>>SolaimanLipi</option>
-                        <option value="Siyam Rupali" <?php selected( cpic()->settings->get( 'cpic_date_font' ), 'Siyam Rupali' ); ?>>Siyam Rupali</option>
-                    </select>
-                </label>
-                <label><?php esc_html_e( 'Date Color', 'custom-post-image-creator' ); ?>
-                    <input type="text" id="cpic_date_color" class="cpic-color-picker" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_date_color' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'Date BG Color', 'custom-post-image-creator' ); ?>
-                    <input type="text" id="cpic_date_bg_color" class="cpic-color-picker" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_date_bg_color' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'X Offset', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_date_offset_x" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_date_offset_x' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'Y Offset', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_date_offset_y" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_date_offset_y' ) ); ?>" />
-                </label>
-            </div>
-
-            <!-- Featured image controls -->
-            <div class="cpic-col cpic-card">
-                <h3><?php esc_html_e( 'Featured Image', 'custom-post-image-creator' ); ?></h3>
-                <label><?php esc_html_e( 'X Offset', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_feat_offset_x" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_feat_offset_x' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'Y Offset', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_feat_offset_y" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_feat_offset_y' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'Width', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_feat_width" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_feat_width' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'Height', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_feat_height" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_feat_height' ) ); ?>" />
-                </label>
-            </div>
-
-            <!-- Logo controls -->
-            <div class="cpic-col cpic-card">
-                <h3><?php esc_html_e( 'Brand Logo', 'custom-post-image-creator' ); ?></h3>
-                <div class="cpic-logo-preview">
-                    <?php
-                    $logo = cpic()->settings->get( 'cpic_logo' );
-                    if ( $logo ) :
-                    ?>
-                        <img id="cpic-logo-img" src="<?php echo esc_url( $logo ); ?>" alt="logo" />
-                    <?php else : ?>
-                        <img id="cpic-logo-img" src="" alt="logo" style="display:none;" />
-                    <?php endif; ?>
-                </div>
-                <button type="button" id="cpic-upload-logo" class="button"><?php esc_html_e( 'Upload Logo', 'custom-post-image-creator' ); ?></button>
-                <button type="button" id="cpic-remove-logo" class="button button-secondary"><?php esc_html_e( 'Remove Logo', 'custom-post-image-creator' ); ?></button>
-                <input type="hidden" id="cpic_logo" value="<?php echo esc_url( $logo ); ?>" />
-                <label><?php esc_html_e( 'Width', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_logo_width" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_logo_width' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'X Offset', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_logo_offset_x" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_logo_offset_x' ) ); ?>" />
-                </label>
-                <label><?php esc_html_e( 'Y Offset', 'custom-post-image-creator' ); ?>
-                    <input type="number" id="cpic_logo_offset_y" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_logo_offset_y' ) ); ?>" />
-                </label>
-            </div>
-
-            <!-- Caption / comment message -->
-            <div class="cpic-col cpic-card">
-                <h3><?php esc_html_e( 'Caption Message', 'custom-post-image-creator' ); ?></h3>
-                <label><?php esc_html_e( 'Custom comment message', 'custom-post-image-creator' ); ?>
-                    <input type="text" id="cpic_comment_message" value="<?php echo esc_attr( cpic()->settings->get( 'cpic_comment_message' ) ); ?>" />
-                </label>
-            </div>
-
-        </div>
-
-        <!-- Background Management -->
-        <div class="cpic-card cpic-bg-section">
-            <h3><?php esc_html_e( 'Backgrounds', 'custom-post-image-creator' ); ?></h3>
-            <div id="cpic-bg-gallery" class="cpic-bg-gallery">
-                <?php
-                $backgrounds = cpic()->settings->get( 'cpic_background_images' );
-                if ( is_array( $backgrounds ) ) :
-                    foreach ( $backgrounds as $bg ) :
-                ?>
-                    <div class="cpic-bg-item" data-url="<?php echo esc_url( $bg ); ?>">
-                        <img src="<?php echo esc_url( $bg ); ?>" alt="bg" />
-                        <button type="button" class="cpic-bg-remove" title="<?php esc_attr_e( 'Remove', 'custom-post-image-creator' ); ?>">&times;</button>
-                    </div>
-                <?php
-                    endforeach;
-                endif;
-                ?>
-            </div>
-            <button type="button" id="cpic-add-bg" class="button"><?php esc_html_e( 'Add Background', 'custom-post-image-creator' ); ?></button>
-            <button type="button" id="cpic-clear-bgs" class="button button-secondary"><?php esc_html_e( 'Clear All', 'custom-post-image-creator' ); ?></button>
-            <label><?php esc_html_e( 'Active Background', 'custom-post-image-creator' ); ?>
-                <?php $active_bg = cpic()->settings->get( 'cpic_active_background' ); ?>
-                <select id="cpic-bg-selector">
-                    <option value=""><?php esc_html_e( '— Gradient Fallback —', 'custom-post-image-creator' ); ?></option>
-                    <?php
-                    if ( is_array( $backgrounds ) ) :
-                        foreach ( $backgrounds as $i => $bg ) :
-                    ?>
-                        <option value="<?php echo esc_url( $bg ); ?>" <?php selected( $active_bg, $bg ); ?>>
-                            <?php echo esc_html( sprintf( __( 'Background %d', 'custom-post-image-creator' ), $i + 1 ) ); ?>
-                        </option>
-                    <?php
-                        endforeach;
-                    endif;
-                    ?>
-                </select>
-                <input type="hidden" id="cpic_active_background" value="<?php echo esc_url( $active_bg ); ?>" />
-            </label>
-        </div>
-
-        <!-- Publishing destinations -->
-        <div class="cpic-card">
-            <h3><?php esc_html_e( 'Publishing Destinations', 'custom-post-image-creator' ); ?></h3>
-            <label>
-                <input type="checkbox" id="cpic_auto_fb" value="1" <?php checked( cpic()->settings->get( 'cpic_auto_fb' ), 1 ); ?> />
-                <?php esc_html_e( 'Auto post to Facebook', 'custom-post-image-creator' ); ?>
-            </label>
-            <label>
-                <input type="checkbox" id="cpic_auto_tg" value="1" <?php checked( cpic()->settings->get( 'cpic_auto_tg' ), 1 ); ?> />
-                <?php esc_html_e( 'Auto post to Telegram', 'custom-post-image-creator' ); ?>
-            </label>
-            <p class="cpic-preview-hint"><?php esc_html_e( 'One persistent job owns each post. It creates one Facebook photo timeline post, then adds the article link as its first comment.', 'custom-post-image-creator' ); ?></p>
-        </div>
-
-        <!-- Automation Settings (new template/job system) -->
-        <div class="cpic-card">
-            <h3><?php esc_html_e( 'Automation Settings (Template System)', 'custom-post-image-creator' ); ?></h3>
-            <p class="cpic-preview-hint">
-                <?php esc_html_e( 'When enabled, publishing a post automatically runs the full pipeline: resolve template by category → generate photocard → publish to Facebook → post article URL as first comment. All in the background.', 'custom-post-image-creator' ); ?>
-            </p>
-            <label>
-                <input type="checkbox" id="cpic_auto_generate" value="1" <?php checked( CPIC_Settings::get_single( 'cpic_auto_generate', 1 ), 1 ); ?> />
-                <?php esc_html_e( 'Enable automatic generation & publishing', 'custom-post-image-creator' ); ?>
-            </label>
-            <label>
-                <input type="checkbox" id="cpic_auto_comment" value="1" <?php checked( CPIC_Settings::get_single( 'cpic_auto_comment', 1 ), 1 ); ?> />
-                <?php esc_html_e( 'Enable automatic first comment (article URL)', 'custom-post-image-creator' ); ?>
-            </label>
-            <label><?php esc_html_e( 'Maximum retry attempts', 'custom-post-image-creator' ); ?>
-                <input type="number" id="cpic_max_retries" min="0" max="10" value="<?php echo esc_attr( CPIC_Settings::get_single( 'cpic_max_retries', 3 ) ); ?>" />
-            </label>
-            <label><?php esc_html_e( 'Default template', 'custom-post-image-creator' ); ?>
-                <select id="cpic_default_template_id">
-                    <option value="0"><?php esc_html_e( '— Auto (first active) —', 'custom-post-image-creator' ); ?></option>
-                    <?php foreach ( CPIC_Template_Manager::get_templates() as $cpic_tpl ) : ?>
-                        <option value="<?php echo esc_attr( (int) $cpic_tpl['id'] ); ?>" <?php selected( CPIC_Settings::get_single( 'cpic_default_template_id' ), (int) $cpic_tpl['id'] ); ?>>
-                            <?php echo esc_html( $cpic_tpl['name'] ); ?><?php echo ! empty( $cpic_tpl['is_default'] ) ? ' (' . esc_html__( 'Default', 'custom-post-image-creator' ) . ')' : ''; ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </label>
-        </div>
-
-        <p>
-            <button type="button" id="cpic-save-settings" class="button button-primary button-hero"><?php esc_html_e( 'Save All Settings', 'custom-post-image-creator' ); ?></button>
-            <span id="cpic-save-status"></span>
-        </p>
-    </div>
-
-    <?php endif; ?>
-
     <!-- Global settings -->
     <div class="cpic-card">
         <h3><?php esc_html_e( 'Global Caption / Comment Settings', 'custom-post-image-creator' ); ?></h3>
@@ -425,7 +209,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     <div class="cpic-card">
         <h3><?php esc_html_e( 'Automation Settings', 'custom-post-image-creator' ); ?></h3>
         <label>
-            <input type="checkbox" id="cpic_auto_generate" value="1" <?php checked( CPIC_Settings::get_single( 'cpic_auto_generate', 1 ), 1 ); ?> />
+            <input type="checkbox" id="cpic_auto_generate" value="1" <?php checked( CPIC_Settings::get_single( 'cpic_auto_generate', 0 ), 1 ); ?> />
             <?php esc_html_e( 'Enable automatic generation & publishing', 'custom-post-image-creator' ); ?>
         </label>
         <label>
@@ -448,6 +232,11 @@ if ( ! defined( 'ABSPATH' ) ) {
                 <?php endforeach; ?>
             </select>
         </label>
+        <label class="cpic-danger-setting">
+            <input type="checkbox" id="cpic_delete_data_on_uninstall" value="1" <?php checked( CPIC_Settings::get_single( 'cpic_delete_data_on_uninstall', 0 ), 1 ); ?> />
+            <?php esc_html_e( 'Delete plugin settings, templates, jobs, logs and generated images when uninstalling', 'custom-post-image-creator' ); ?>
+        </label>
+        <p class="cpic-preview-hint"><?php esc_html_e( 'All plugin data is preserved on uninstall by default. Enable this only if you explicitly want a full data purge.', 'custom-post-image-creator' ); ?></p>
     </div>
 
     <p>
@@ -461,7 +250,6 @@ if ( ! defined( 'ABSPATH' ) ) {
     <div class="cpic-section cpic-preview-section">
         <h2><?php esc_html_e( 'Image Preview', 'custom-post-image-creator' ); ?></h2>
         <div class="cpic-canvas-container">
-            <canvas id="cpic-canvas" width="1080" height="1080"></canvas>
             <img id="cpic-server-preview" src="" alt="<?php esc_attr_e( 'Template preview', 'custom-post-image-creator' ); ?>" style="display:none;max-width:100%;height:auto;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.35);" />
             <p id="cpic-preview-info" class="cpic-preview-hint" style="display:none;"></p>
         </div>

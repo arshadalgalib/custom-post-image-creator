@@ -76,18 +76,6 @@ class CPIC_Security {
      * @param mixed  $context Optional additional data.
      */
     public static function log( $type, $message, $context = '' ) {
-        global $wpdb;
-        $table = $wpdb->prefix . 'cpic_logs';
-
-        $wpdb->insert(
-            $table,
-            array(
-                'log_type'   => sanitize_text_field( $type ),
-                'message'    => sanitize_textarea_field( $message ),
-                'context'    => is_array( $context ) || is_object( $context ) ? wp_json_encode( $context ) : sanitize_textarea_field( (string) $context ),
-                'created_at' => current_time( 'mysql' ),
-            ),
-            array( '%s', '%s', '%s', '%s' )
-        );
+        CPIC_Logger::log( $type, $message, $context );
     }
 }

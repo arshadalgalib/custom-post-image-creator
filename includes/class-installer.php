@@ -24,8 +24,9 @@ class CPIC_Installer {
         self::create_jobs_table();
 
         self::ensure_upload_dirs();
-
+        self::migrate_automation_setting();
         self::maybe_migrate();
+        self::import_legacy_queue();
 
         update_option( 'cpic_db_version', CPIC_VERSION );
     }
@@ -114,6 +115,10 @@ class CPIC_Installer {
             image_url TEXT,
             facebook_post_id VARCHAR(191) NOT NULL DEFAULT '',
             facebook_comment_id VARCHAR(191) NOT NULL DEFAULT '',
+            telegram_message_id VARCHAR(191) NOT NULL DEFAULT '',
+            auto_facebook TINYINT(1) NULL DEFAULT NULL,
+            auto_telegram TINYINT(1) NULL DEFAULT NULL,
+            next_attempt_at BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
             attempts INT NOT NULL DEFAULT 0,
             max_retries INT NOT NULL DEFAULT 3,
             last_error TEXT,
@@ -123,6 +128,7 @@ class CPIC_Installer {
             UNIQUE KEY job_key (job_key),
             KEY post_id (post_id),
             KEY status (status),
+            KEY next_attempt_at (next_attempt_at),
             KEY created_at (created_at)
         ) {$charset};";
         dbDelta( $sql );
@@ -133,12 +139,78 @@ class CPIC_Installer {
      */
     private static function ensure_upload_dirs() {
         $upload_dir = wp_upload_dir();
-        foreach ( array( 'cpic-temp', 'cpic-generated', 'cpic-previews' ) as $dir ) {
-            $path = $upload_dir['basedir'] . '/' . $dir;
-            if ( ! file_exists( $path ) ) {
+        foreach ( array( 'cpic-temp', 'cpic-generated', 'cpic-previews', 'cpic-fontconfig' ) as $dir ) {
+            $path = trailingslashit( $upload_dir['basedir'] ) . $dir;
+            if ( ! is_dir( $path ) ) {
                 wp_mkdir_p( $path );
             }
+            if ( ! is_dir( $path ) ) { continue; }
+            if ( ! file_exists( $path . '/index.php' ) ) {
+                file_put_contents( $path . '/index.php', "<?php\n// Silence is golden.\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+            }
+            if ( ! file_exists( $path . '/.htaccess' ) ) {
+                $rules = 'Options -Indexes' . ( in_array( $dir, array( 'cpic-temp', 'cpic-previews', 'cpic-fontconfig' ), true )
+                    ? "\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>"
+                    : '' );
+                file_put_contents( $path . '/.htaccess', $rules . "\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+            }
+            if ( ! file_exists( $path . '/web.config' ) ) {
+                $rules = '<configuration><system.webServer><directoryBrowse enabled="false" />';
+                if ( in_array( $dir, array( 'cpic-temp', 'cpic-previews', 'cpic-fontconfig' ), true ) ) {
+                    $rules .= '<security><authorization><clear /><add accessType="Deny" users="*" /></authorization></security>';
+                }
+                file_put_contents( $path . '/web.config', $rules . '</system.webServer></configuration>' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+            }
         }
+    }
+
+    /** Import pending option-backed tasks into the durable queue exactly once. */
+    private static function import_legacy_queue() {
+        if ( get_option( 'cpic_legacy_queue_migrated', false ) ) {
+            return;
+        }
+        $legacy = get_option( 'cpic_publish_queue', array() );
+        $complete = true;
+        if ( is_array( $legacy ) ) {
+            foreach ( $legacy as $task ) {
+                if ( ! is_array( $task ) ) { continue; }
+                $post_id = isset( $task['post_id'] ) ? absint( $task['post_id'] ) : 0;
+                $post = $post_id ? get_post( $post_id ) : null;
+                if ( ! $post || 'post' !== $post->post_type || 'publish' !== $post->post_status ) {
+                    continue;
+                }
+                $job = cpic()->queue->create_job( $post_id );
+                if ( ! $job ) {
+                    $complete = false;
+                    continue;
+                }
+                if ( 'published' === $job['status'] ) {
+                    continue;
+                }
+                $update = array(
+                    'auto_facebook' => isset( $task['auto_fb'] ) ? (int) ! empty( $task['auto_fb'] ) : (int) CPIC_Settings::get_single( 'cpic_auto_fb', 0 ),
+                    'auto_telegram' => isset( $task['auto_tg'] ) ? (int) ! empty( $task['auto_tg'] ) : (int) CPIC_Settings::get_single( 'cpic_auto_tg', 0 ),
+                );
+                if ( isset( $task['scheduled_at'] ) ) {
+                    $update['next_attempt_at'] = max( 0, (int) $task['scheduled_at'] );
+                }
+                if ( ! cpic()->queue->update( (int) $job['id'], $update ) ) {
+                    $complete = false;
+                }
+            }
+        }
+        if ( $complete ) {
+            update_option( 'cpic_legacy_queue_migrated', 1, false );
+        }
+    }
+
+    /** Preserve the old master automation switch when migrating to the new pipeline. */
+    private static function migrate_automation_setting() {
+        if ( false !== get_option( 'cpic_auto_generate', false ) ) {
+            return;
+        }
+        $legacy_enabled = get_option( 'cpic_auto_publish', 0 );
+        CPIC_Settings::set_single( 'cpic_auto_generate', $legacy_enabled ? 1 : 0 );
     }
 
     /**

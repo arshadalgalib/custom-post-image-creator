@@ -38,7 +38,7 @@ class CPIC_Facebook_API {
         }
 
         // First validate the token by calling /me to distinguish user vs page token.
-        $me_url  = self::GRAPH_URL . 'me?fields=id,name&access_token=' . $user_token;
+        $me_url  = self::GRAPH_URL . 'me?' . http_build_query( array( 'fields' => 'id,name', 'access_token' => $user_token ), '', '&', PHP_QUERY_RFC3986 );
         $me_resp = wp_remote_get( $me_url, array( 'timeout' => 15 ) );
 
         if ( is_wp_error( $me_resp ) ) {
@@ -150,8 +150,8 @@ class CPIC_Facebook_API {
         cpic()->security->verify_ajax_request();
 
         $post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0;
-        if ( ! $post_id || ! get_post( $post_id ) ) {
-            wp_send_json_error( array( 'message' => __( 'Invalid post.', 'custom-post-image-creator' ) ) );
+        if ( ! $post_id || ! get_post( $post_id ) || ! current_user_can( 'edit_post', $post_id ) || 'publish' !== get_post_status( $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Invalid post or permission denied.', 'custom-post-image-creator' ) ), 403 );
         }
 
         // Server-side template generation (bypasses client-side canvas).
@@ -165,23 +165,16 @@ class CPIC_Facebook_API {
             }
         }
 
-        // Fallback: legacy generate when no template resolved.
-        if ( empty( $generated_path ) || ! file_exists( $generated_path ) ) {
-            $img = cpic()->image_generator->generate( $post_id );
-            if ( ! is_wp_error( $img ) ) {
-                $generated_path = $img['path'];
-            }
-        }
-
         if ( empty( $generated_path ) || ! file_exists( $generated_path ) ) {
             wp_send_json_error( array( 'message' => __( 'Could not generate photocard image.', 'custom-post-image-creator' ) ) );
         }
 
-        $result = $this->share( $post_id, $generated_path );
-
-        // Remove generated temp file.
-        if ( $generated_path && file_exists( $generated_path ) ) {
-            wp_delete_file( $generated_path );
+        try {
+            $result = $this->share( $post_id, $generated_path );
+        } finally {
+            if ( $generated_path && file_exists( $generated_path ) ) {
+                cpic()->image_generator->cleanup( $generated_path );
+            }
         }
 
         if ( is_wp_error( $result ) ) {
@@ -189,103 +182,6 @@ class CPIC_Facebook_API {
         }
 
         wp_send_json_success( $result );
-    }
-
-    /**
-     * Create a temp PNG file from a canvas data URL.
-     *
-     * @param string $data_url Canvas data URL.
-     * @param int    $post_id  Post ID.
-     * @return string|WP_Error
-     */
-    private function create_temp_png_from_data_url( $data_url, $post_id ) {
-        $data_url = trim( (string) $data_url );
-        if ( empty( $data_url ) || strpos( $data_url, 'data:image/png;base64,' ) !== 0 ) {
-            return new WP_Error( 'fb_canvas_invalid', __( 'Invalid canvas data.', 'custom-post-image-creator' ) );
-        }
-
-        $raw = substr( $data_url, strlen( 'data:image/png;base64,' ) );
-        $bin = base64_decode( str_replace( ' ', '+', $raw ), true );
-        if ( false === $bin ) {
-            return new WP_Error( 'fb_canvas_decode', __( 'Could not decode canvas image.', 'custom-post-image-creator' ) );
-        }
-
-        $filename = 'cpic-canvas-' . $post_id . '-' . time() . '.png';
-        $saved    = wp_upload_bits( $filename, null, $bin );
-
-        if ( ! empty( $saved['error'] ) ) {
-            return new WP_Error( 'fb_canvas_save', $saved['error'] );
-        }
-
-        return $saved['file'];
-    }
-
-    /**
-     * Store uploaded preview canvas file in uploads.
-     *
-     * @param array $file    Uploaded file array.
-     * @param int   $post_id Post ID.
-     * @return string|WP_Error
-     */
-    private function create_temp_png_from_upload( $file, $post_id ) {
-        if ( empty( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) ) {
-            return new WP_Error( 'fb_canvas_upload', __( 'Invalid uploaded canvas file.', 'custom-post-image-creator' ) );
-        }
-
-        $filename = 'cpic-canvas-' . $post_id . '-' . time() . '.png';
-        $bits     = wp_upload_bits( $filename, null, file_get_contents( $file['tmp_name'] ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- uploaded temp file
-
-        if ( ! empty( $bits['error'] ) ) {
-            return new WP_Error( 'fb_canvas_save', $bits['error'] );
-        }
-
-        return $bits['file'];
-    }
-
-    /**
-     * Sanitize image settings overrides sent from the admin UI.
-     *
-     * @param array $settings Raw settings.
-     * @return array
-     */
-    private function sanitize_settings_overrides( $settings ) {
-        $clean      = array();
-        $text_keys  = array( 'cpic_title_font', 'cpic_date_font', 'cpic_comment_message' );
-        $color_keys = array( 'cpic_title_color', 'cpic_date_color', 'cpic_date_bg_color' );
-        $int_keys   = array(
-            'cpic_title_size', 'cpic_title_offset_x', 'cpic_title_offset_y',
-            'cpic_date_offset_x', 'cpic_date_offset_y',
-            'cpic_logo_width', 'cpic_logo_offset_x', 'cpic_logo_offset_y',
-            'cpic_feat_offset_x', 'cpic_feat_offset_y', 'cpic_feat_width', 'cpic_feat_height',
-            'cpic_canvas_width', 'cpic_canvas_height',
-        );
-        $url_keys   = array( 'cpic_logo', 'cpic_active_background' );
-
-        foreach ( $text_keys as $key ) {
-            if ( isset( $settings[ $key ] ) ) {
-                $clean[ $key ] = sanitize_text_field( $settings[ $key ] );
-            }
-        }
-
-        foreach ( $color_keys as $key ) {
-            if ( isset( $settings[ $key ] ) ) {
-                $clean[ $key ] = sanitize_hex_color( $settings[ $key ] ) ?: '';
-            }
-        }
-
-        foreach ( $int_keys as $key ) {
-            if ( isset( $settings[ $key ] ) ) {
-                $clean[ $key ] = intval( $settings[ $key ] );
-            }
-        }
-
-        foreach ( $url_keys as $key ) {
-            if ( isset( $settings[ $key ] ) ) {
-                $clean[ $key ] = esc_url_raw( $settings[ $key ] );
-            }
-        }
-
-        return $clean;
     }
 
     /* ─── Job-aware publishing ───────────────────────── */
@@ -602,11 +498,10 @@ class CPIC_Facebook_API {
         if ( empty( $image_path ) || ! file_exists( $image_path ) ) {
             // Resolve category-mapped template first.
             $tpl = cpic()->category_mapper->resolve_template_for_post( $post_id );
-            if ( $tpl && ! empty( $tpl['config'] ) ) {
-                $img = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
-            } else {
-                $img = cpic()->image_generator->generate( $post_id );
+            if ( ! $tpl || empty( $tpl['config'] ) ) {
+                return new WP_Error( 'fb_template_missing', __( 'No active template is available for this post.', 'custom-post-image-creator' ) );
             }
+            $img = cpic()->image_generator->generate_from_template( $post_id, $tpl['config'] );
             if ( is_wp_error( $img ) ) {
                 return $img;
             }
@@ -716,14 +611,39 @@ class CPIC_Facebook_API {
         $caption .= 'বিস্তারিত পড়ুন কমেন্টে';
 
         // Enforce Facebook's 5000-character limit.
-        if ( mb_strlen( $caption, 'UTF-8' ) > 5000 ) {
+        if ( $this->utf8_length( $caption ) > 5000 ) {
             $suffix  = "\n\nবিস্তারিত পড়ুন কমেন্টে";
-            $allowed = max( 1, 5000 - mb_strlen( $suffix, 'UTF-8' ) );
+            $allowed = max( 0, 5000 - $this->utf8_length( $suffix ) - 1 );
             $body    = implode( "\n\n", $parts );
-            $caption = mb_substr( $body, 0, $allowed, 'UTF-8' ) . '…' . $suffix;
+            $caption = $this->utf8_slice( $body, $allowed ) . '…' . $suffix;
         }
 
         return $caption;
+    }
+
+    /** Count Unicode code points without requiring the optional mbstring extension. */
+    private function utf8_length( $value ) {
+        if ( function_exists( 'mb_strlen' ) ) { return mb_strlen( $value, 'UTF-8' ); }
+        if ( preg_match_all( '/./us', (string) $value, $matches ) ) { return count( $matches[0] ); }
+        return strlen( (string) $value );
+    }
+
+    /** Truncate on grapheme boundaries while respecting a code-point limit. */
+    private function utf8_slice( $value, $length ) {
+        $length = max( 0, (int) $length );
+        if ( preg_match_all( '/\\X/u', (string) $value, $matches ) ) {
+            $result = '';
+            $used = 0;
+            foreach ( $matches[0] as $grapheme ) {
+                $points = preg_match_all( '/./us', $grapheme, $point_matches );
+                if ( false === $points || $used + $points > $length ) { break; }
+                $result .= $grapheme;
+                $used += $points;
+            }
+            return $result;
+        }
+        if ( function_exists( 'mb_substr' ) ) { return mb_substr( $value, 0, $length, 'UTF-8' ); }
+        return substr( (string) $value, 0, $length );
     }
 
 }

@@ -39,6 +39,11 @@ class CPIC_Renderer {
      */
     public static $last_text_mode = 'annotate';
 
+    /** Last-render typography diagnostics (per request).
+     * @var array
+     */
+    public static $last_typography = array();
+
     /**
      * Gather post data and render.
      *
@@ -88,6 +93,8 @@ class CPIC_Renderer {
             return new WP_Error( 'imagick_missing', __( 'Imagick PHP extension is required.', 'custom-post-image-creator' ) );
         }
 
+        self::$last_typography = array( 'elements' => array() );
+        $this->prune_stale_generated_files();
         $config    = CPIC_Template_Manager::normalize_config( $config );
         $canvas_cfg = $config['canvas'];
 
@@ -132,7 +139,9 @@ class CPIC_Renderer {
             $filepath = trailingslashit( $basedir ) . $filename;
             $fileurl  = trailingslashit( $upload_dir['baseurl'] ) . 'cpic-generated/' . $filename;
 
-            $canvas->writeImage( $filepath );
+            if ( ! $canvas->writeImage( $filepath ) || ! is_file( $filepath ) || ! filesize( $filepath ) ) {
+                throw new RuntimeException( __( 'Generated PNG could not be written to the uploads directory.', 'custom-post-image-creator' ) );
+            }
             $canvas->clear();
             $canvas->destroy();
 
@@ -140,13 +149,48 @@ class CPIC_Renderer {
                 'url'  => $fileurl,
                 'path' => $filepath,
             );
-        } catch ( \Exception $e ) {
+        } catch ( \Throwable $e ) {
             if ( isset( $canvas ) && $canvas instanceof Imagick ) {
                 $canvas->clear();
                 $canvas->destroy();
             }
             CPIC_Logger::log( 'imagick', __( 'Render failed.', 'custom-post-image-creator' ), array( 'error' => $e->getMessage() ) );
             return new WP_Error( 'render_error', $e->getMessage() );
+        }
+    }
+
+    /** Prune only old, unreferenced files under the plugin-owned output folder. */
+    private function prune_stale_generated_files() {
+        if ( get_transient( 'cpic_generated_prune_lock' ) ) {
+            return;
+        }
+        set_transient( 'cpic_generated_prune_lock', 1, DAY_IN_SECONDS );
+        $upload = wp_upload_dir();
+        $dir = trailingslashit( $upload['basedir'] ) . 'cpic-generated/';
+        if ( ! is_dir( $dir ) ) {
+            return;
+        }
+        global $wpdb;
+        $table = $wpdb->prefix . 'cpic_jobs';
+        $exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) );
+        $referenced = $exists ? $wpdb->get_col( "SELECT image_path FROM {$table} WHERE image_path IS NOT NULL AND image_path != ''" ) : array(); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+        $keep = array();
+        foreach ( is_array( $referenced ) ? $referenced : array() as $path ) {
+            $real = realpath( $path );
+            if ( $real ) { $keep[ $real ] = true; }
+        }
+        $files = glob( $dir . 'cpic-*.png' );
+        foreach ( is_array( $files ) ? $files : array() as $file ) {
+            $real = realpath( $file );
+            if ( $real && empty( $keep[ $real ] ) && filemtime( $real ) < time() - ( 7 * DAY_IN_SECONDS ) ) {
+                wp_delete_file( $real );
+            }
+        }
+        $archives = glob( $dir . 'cpic-bulk-*.zip' );
+        foreach ( is_array( $archives ) ? $archives : array() as $archive ) {
+            if ( is_file( $archive ) && filemtime( $archive ) < time() - DAY_IN_SECONDS ) {
+                wp_delete_file( $archive );
+            }
         }
     }
 
@@ -202,6 +246,7 @@ class CPIC_Renderer {
                     'source' => $source,
                 );
             } elseif ( 'text' === ( $el['type'] ?? '' ) ) {
+                $el['id'] = (string) $key;
                 $text = $this->text_for_element( $key, $el, $data );
                 if ( '' === $text ) {
                     continue;
@@ -405,11 +450,19 @@ class CPIC_Renderer {
 
         $font_name   = $el['font'] ?? 'Noto Serif Bengali';
         $font_file   = $this->resolve_font( $font_name );
+        $font_name   = $this->font_family_for_file( $font_file, $font_name );
         $font_size   = max( 1, (int) ( $el['font_size'] ?? 28 ) );
         $color       = $this->sanitize_color( $el['color'] ?? '', '#FFFFFF' );
         $align       = $el['align'] ?? 'left';
-        $x           = (int) ( $el['x'] ?? 40 );
-        $y           = (int) ( $el['y'] ?? 40 );
+        $x           = max( 0, min( $w - 1, (int) ( $el['x'] ?? 40 ) ) );
+        $y           = max( 0, min( $h - 1, (int) ( $el['y'] ?? 40 ) ) );
+        $el['x'] = $x;
+        $el['y'] = $y;
+        $available_height = max( 1, $h - $y );
+        $el['max_height'] = isset( $el['max_height'] ) && (int) $el['max_height'] > 0
+            ? min( $available_height, (int) $el['max_height'] )
+            : $available_height;
+        if ( isset( $el['max_width'] ) ) { $el['max_width'] = max( 1, min( (int) $el['max_width'], $w - $x ) ); }
         $bold        = ! empty( $el['bold'] );
         $shadow_color = $this->sanitize_color( $el['shadow_color'] ?? '', '#00000080' );
         $shadow_off  = (int) ( $el['shadow_offset'] ?? 1 );
@@ -418,9 +471,14 @@ class CPIC_Renderer {
         $padding_y = (int) ( $el['padding_y'] ?? 0 );
         $radius    = (int) ( $el['border_radius'] ?? 0 );
 
-        // Adaptive headline scaling.
-        if ( ! empty( $el['max_lines'] ) && ! empty( $el['max_width'] ) ) {
-            $font_size = $this->fit_headline_font( $text, $el, $font_file, $w );
+        // Adaptive sizing is opt-in and applies only to the headline.
+        // Pango performs its own complex-script-aware sizing when available.
+        $requested_size = $font_size;
+        $el['_requested_size'] = $requested_size;
+        if ( 'headline' === ( $el['id'] ?? '' ) || isset( $el['max_lines'] ) ) {
+            if ( ! empty( $el['auto_scale'] ) ) {
+                $font_size = $this->fit_headline_font( $text, $el, $font_file, $w, $h );
+            }
         }
 
         // Text engine priority for correct complex-script (Bangla) shaping:
@@ -438,12 +496,29 @@ class CPIC_Renderer {
                 return;
             }
         }
+        if ( preg_match( '/[\x{0980}-\x{09FF}]/u', $text ) ) {
+            throw new RuntimeException( __( 'Bengali text requires a working Pango/HarfBuzz rendering engine. Install Python PangoCairo or ImageMagick Pango support; refusing to generate potentially broken glyphs.', 'custom-post-image-creator' ) );
+        }
         self::$last_text_mode = 'annotate';
 
-        $draw = $this->make_text_draw( $font_file, $font_size, $color, $bold );
+        $letter_spacing = (float) ( $el['letter_spacing'] ?? 0 );
+        $draw = $this->make_text_draw( $font_file, $font_size, $color, $bold, $letter_spacing );
 
-        // Measure the wrapped text.
+        // Measure and wrap using the fallback engine's own metrics.
         list( $lines, $max_text_w, $line_h ) = $this->wrap_measure( $text, $font_file, $font_size, $el, $w );
+        $line_limit = isset( $el['max_lines'] ) ? max( 1, (int) $el['max_lines'] ) : count( $lines );
+        if ( ! empty( $el['max_height'] ) ) {
+            $line_limit = min( $line_limit, max( 1, (int) floor( (int) $el['max_height'] / max( 1, $line_h ) ) ) );
+        }
+        if ( count( $lines ) > $line_limit ) {
+            $lines = array_slice( $lines, 0, $line_limit );
+            $lines[count( $lines ) - 1] = rtrim( $lines[count( $lines ) - 1] ) . '…';
+        }
+        $diagnostic = array( 'element' => $el['id'] ?? '', 'font' => $font_name, 'font_file' => $font_file, 'engine' => 'annotate', 'requested_size' => $requested_size, 'final_size' => $font_size, 'line_count' => count( $lines ), 'measured_width' => $max_text_w, 'measured_height' => $line_h * count( $lines ), 'auto_scaled' => $requested_size !== $font_size, 'fallback' => true );
+        self::$last_typography['elements'][] = $diagnostic;
+        $elements = self::$last_typography['elements'];
+        self::$last_typography = $diagnostic;
+        self::$last_typography['elements'] = $elements;
 
         // Background pill (for category / date labels).
         if ( ! empty( $el['background_color'] ) ) {
@@ -462,16 +537,16 @@ class CPIC_Renderer {
         // Alignment offset.
         $align_offset = 0;
         if ( 'center' === $align ) {
-            $align_offset = (int) round( ( $w - $max_text_w ) / 2 );
+            $align_offset = (int) round( ( max( 1, (int) ( $el['max_width'] ?? ( $w - $x ) ) ) - $max_text_w ) / 2 );
         } elseif ( 'right' === $align ) {
-            $align_offset = $w - $max_text_w;
+            $align_offset = max( 1, (int) ( $el['max_width'] ?? ( $w - $x ) ) ) - $max_text_w;
         }
 
         $line_y = $y;
         foreach ( $lines as $line ) {
             $line_x = $x + $align_offset;
             if ( $shadow_off > 0 ) {
-                $sd = $this->make_text_draw( $font_file, $font_size, $shadow_color, $bold );
+                $sd = $this->make_text_draw( $font_file, $font_size, $shadow_color, $bold, $letter_spacing );
                 $canvas->annotateImage( $sd, $line_x + $shadow_off, $line_y + $shadow_off, 0, $line );
             }
             $canvas->annotateImage( $draw, $line_x, $line_y, 0, $line );
@@ -489,34 +564,37 @@ class CPIC_Renderer {
      * @param int    $canvas_w  Canvas width.
      * @return int Final font size.
      */
-    private function fit_headline_font( $text, $el, $font_file, $canvas_w ) {
-        $max_lines = max( 1, (int) ( $el['max_lines'] ?? 3 ) );
-        $max_width = (int) ( $el['max_width'] ?? ( $canvas_w - 80 ) );
-        $max_width = min( $max_width, $canvas_w - 10 );
-
+    private function fit_headline_font( $text, $el, $font_file, $canvas_w, $canvas_h = 0 ) {
+        $max_lines = max( 1, min( 30, (int) ( $el['max_lines'] ?? 3 ) ) );
+        $x = max( 0, (int) ( $el['x'] ?? 0 ) );
+        $max_width = max( 1, min( (int) ( $el['max_width'] ?? ( $canvas_w - $x - 40 ) ), $canvas_w - $x ) );
         $size   = max( 1, (int) ( $el['font_size'] ?? 42 ) );
         $min_sz = max( 1, (int) ( $el['min_font_size'] ?? 20 ) );
-        $max_sz = max( $min_sz, (int) ( $el['max_font_size'] ?? 56 ) );
-
-        $size = max( $min_sz, min( $size, $max_sz ) );
-
-        $tmp = new Imagick();
-        $tmp->newImage( 1, 1, new ImagickPixel( 'transparent' ) );
-
-        for ( $attempt = $size; $attempt >= $min_sz; $attempt-- ) {
-            $draw = $this->make_draw( $font_file, $attempt );
-            $wrapped = $this->wrap_text_to_width( $tmp, $draw, $text, $max_width );
-            if ( count( $wrapped ) <= $max_lines ) {
-                $tmp->clear();
-                $tmp->destroy();
-                return $attempt;
-            }
+        $max_sz = max( $min_sz, (int) ( $el['max_font_size'] ?? $size ) );
+        $size = min( $size, $max_sz );
+        if ( empty( $el['auto_scale'] ) ) {
+            return $size;
         }
 
-        $tmp->clear();
-        $tmp->destroy();
-
-        return $min_sz;
+        // Search from largest to smallest so the title remains as readable as possible.
+        $tmp = new Imagick();
+        $tmp->newImage( 1, 1, new ImagickPixel( 'transparent' ) );
+        try {
+            for ( $candidate = $max_sz; $candidate >= $min_sz; --$candidate ) {
+                $draw = $this->make_draw( $font_file, $candidate, (float) ( $el['letter_spacing'] ?? 0 ) );
+                $lines = $this->wrap_text_to_width( $tmp, $draw, $text, $max_width );
+                $line_height = max( 0.8, min( 3.0, (float) ( $el['line_height'] ?? 1.3 ) ) );
+                $height = (int) ceil( $candidate * $line_height * count( $lines ) );
+                $max_height = isset( $el['max_height'] ) ? max( 1, (int) $el['max_height'] ) : 0;
+                if ( count( $lines ) <= $max_lines && ( ! $max_height || $height <= $max_height ) ) {
+                    return $candidate;
+                }
+            }
+            return $min_sz;
+        } finally {
+            $tmp->clear();
+            $tmp->destroy();
+        }
     }
 
     /**
@@ -531,12 +609,12 @@ class CPIC_Renderer {
      */
     private function wrap_measure( $text, $font_file, $font_size, $el, $canvas_w ) {
         $max_width = (int) ( $el['max_width'] ?? ( $canvas_w - 80 ) );
-        $max_width = min( $max_width, $canvas_w - 10 );
+        $max_width = max( 1, min( $max_width, $canvas_w - max( 0, (int) ( $el['x'] ?? 0 ) ) ) );
 
         $tmp = new Imagick();
         $tmp->newImage( 1, 1, new ImagickPixel( 'transparent' ) );
 
-        $draw   = $this->make_draw( $font_file, $font_size );
+        $draw   = $this->make_draw( $font_file, $font_size, (float) ( $el['letter_spacing'] ?? 0 ) );
         $wrapped = $this->wrap_text_to_width( $tmp, $draw, $text, $max_width );
 
         $line_height = (float) ( $el['line_height'] ?? 1.3 );
@@ -565,50 +643,68 @@ class CPIC_Renderer {
      * @return array Lines.
      */
     private function wrap_text_to_width( $tmp, $draw, $text, $max_width ) {
-        $words = preg_split( '/\s+/u', trim( $text ) );
-        if ( empty( $words ) ) {
-            return array( '' );
-        }
-
-        $lines   = array();
-        $current = '';
-        $last_key = -1;
-
-        foreach ( $words as $word ) {
-            $test = $current ? $current . ' ' . $word : $word;
-            $metrics = $tmp->queryFontMetrics( $draw, $test );
-            $test_w  = (float) ( $metrics['textWidth'] ?? 0 );
-
-            if ( $test_w > $max_width && '' !== $current ) {
+        $text = str_replace( array( "\r\n", "\r" ), "\n", (string) $text );
+        $paragraphs = explode( "\n", $text );
+        $lines = array();
+        $max_width = max( 1, (int) $max_width );
+        foreach ( $paragraphs as $paragraph ) {
+            $words = preg_split( '/\s+/u', trim( $paragraph ), -1, PREG_SPLIT_NO_EMPTY );
+            if ( false === $words || empty( $words ) ) {
+                $lines[] = '';
+                continue;
+            }
+            $current = '';
+            foreach ( $words as $word ) {
+                $candidate = '' === $current ? $word : $current . ' ' . $word;
+                $metrics = $tmp->queryFontMetrics( $draw, $candidate );
+                if ( (float) ( $metrics['textWidth'] ?? 0 ) <= $max_width ) {
+                    $current = $candidate;
+                    continue;
+                }
+                if ( '' !== $current ) {
+                    $lines[] = $current;
+                    $current = '';
+                }
+                // Split oversized unbroken words by Unicode codepoint to avoid overflow.
+                if ( preg_match_all( '/\\X/u', $word, $match ) ) {
+                    $chars = $match[0];
+                } else {
+                    $chars = str_split( $word );
+                }
+                foreach ( $chars as $char ) {
+                    $part = $current . $char;
+                    $metrics = $tmp->queryFontMetrics( $draw, $part );
+                    if ( '' !== $current && (float) ( $metrics['textWidth'] ?? 0 ) > $max_width ) {
+                        $lines[] = $current;
+                        $current = $char;
+                    } else {
+                        $current = $part;
+                    }
+                }
+            }
+            if ( '' !== $current ) {
                 $lines[] = $current;
-                $current = $word;
-                $last_key = -1;
-            } else {
-                $current = $test;
             }
         }
-        if ( '' !== $current ) {
-            $lines[] = $current;
-        }
-
-        return $lines;
+        return empty( $lines ) ? array( '' ) : $lines;
     }
 
     /* ─── Drawing helpers ──────────────────────────────── */
 
-    private function make_draw( $font_file, $font_size ) {
+    private function make_draw( $font_file, $font_size, $letter_spacing = 0 ) {
         $d = new ImagickDraw();
         if ( $font_file ) {
             $d->setFont( $font_file );
         }
         $d->setTextEncoding( 'UTF-8' );
         $d->setFontSize( $font_size );
+        if ( method_exists( $d, 'setTextKerning' ) ) { $d->setTextKerning( (float) $letter_spacing ); }
         $d->setTextAntialias( true );
         $d->setStrokeAntialias( true );
         return $d;
     }
 
-    private function make_text_draw( $font_file, $font_size, $color, $bold = false ) {
+    private function make_text_draw( $font_file, $font_size, $color, $bold = false, $letter_spacing = 0 ) {
         $d = new ImagickDraw();
         if ( $font_file ) {
             $d->setFont( $font_file );
@@ -618,6 +714,7 @@ class CPIC_Renderer {
         }
         $d->setTextEncoding( 'UTF-8' );
         $d->setFontSize( $font_size );
+        if ( method_exists( $d, 'setTextKerning' ) ) { $d->setTextKerning( (float) $letter_spacing ); }
         $d->setFillColor( new ImagickPixel( $color ) );
         $d->setGravity( Imagick::GRAVITY_NORTHWEST );
         $d->setTextAntialias( true );
@@ -666,11 +763,15 @@ class CPIC_Renderer {
     private function pango_renderer_available() {
         if ( null === $this->pango_checked ) {
             $this->pango_checked = true;
-            $this->pango_available = (
-                function_exists( 'exec' )
-                && file_exists( CPIC_PLUGIN_DIR . 'includes/render_text_element.py' )
-                && '' !== $this->find_python_binary()
-            );
+            $python = $this->find_python_binary();
+            $this->pango_available = false;
+            if ( function_exists( 'exec' ) && file_exists( CPIC_PLUGIN_DIR . 'includes/render_text_element.py' ) && '' !== $python ) {
+                $code = 'import gi; gi.require_version("Pango", "1.0"); gi.require_version("PangoCairo", "1.0"); from gi.repository import Pango, PangoCairo; import cairo';
+                $output = array();
+                $rc = 1;
+                @exec( escapeshellarg( $python ) . ' -c ' . escapeshellarg( $code ) . ' 2>&1', $output, $rc ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec
+                $this->pango_available = 0 === (int) $rc;
+            }
         }
         return $this->pango_available;
     }
@@ -761,33 +862,12 @@ class CPIC_Renderer {
             'fonts_dir'    => file_exists( CPIC_PLUGIN_DIR . 'fonts' ) && is_dir( CPIC_PLUGIN_DIR . 'fonts' ),
         );
 
-        $candidates = array( '/usr/bin/python3', '/usr/local/bin/python3', '/bin/python3', 'python3' );
-        foreach ( $candidates as $bin ) {
-            if ( '/' === substr( $bin, 0, 1 ) ) {
-                if ( is_executable( $bin ) ) {
-                    $report['python'] = $bin;
-                    break;
-                }
-                continue;
-            }
-            if ( function_exists( 'shell_exec' ) ) {
-                $path = trim( (string) shell_exec( 'command -v ' . escapeshellarg( $bin ) . ' 2>/dev/null' ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-                if ( $path && is_executable( $path ) ) {
-                    $report['python'] = $path;
-                    break;
-                }
-            }
-        }
-
-        if ( '' !== $report['python'] ) {
-            $probe = array();
-            $rc    = 1;
-            @exec( escapeshellarg( $report['python'] ) . ' -c "import gi; gi.require_version(\\"Pango\\", \\"1.0\\"); from gi.repository import Pango, PangoCairo; import cairo" 2>&1', $probe, $rc ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec
-            $report['pango_python'] = ( 0 === (int) $rc );
-        }
+        $renderer = new self();
+        $report['python'] = $renderer->find_python_binary();
+        $report['pango_python'] = $renderer->pango_renderer_available();
 
         if ( class_exists( 'Imagick' ) ) {
-            $bin = ( new self() )->find_magick_binary();
+            $bin = $renderer->find_magick_binary();
             if ( '' !== $bin && function_exists( 'exec' ) ) {
                 $tmp_out = self::temp_path( 'cpic_im_pango_test' ) . '.png';
                 $cmd = $bin . ' -background transparent ' . escapeshellarg( 'pango:test' ) . ' ' . escapeshellarg( $tmp_out ) . ' 2>&1'; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec
@@ -818,7 +898,7 @@ class CPIC_Renderer {
      */
     private function draw_text_element_pango( $canvas, $el, $text, $canvas_w, $font_size, $font_name, $color, $shadow_color, $shadow_off ) {
         $max_width = (int) ( $el['max_width'] ?? ( $canvas_w - 80 ) );
-        $max_width = min( $max_width, $canvas_w - 10 );
+        $max_width = max( 1, min( $max_width, $canvas_w - max( 0, (int) ( $el['x'] ?? 0 ) ) ) );
 
         $upload_dir = wp_upload_dir();
         $tmp_dir    = trailingslashit( $upload_dir['basedir'] ) . 'cpic-temp/';
@@ -834,7 +914,17 @@ class CPIC_Renderer {
             'font'             => (string) $font_name,
             'font_file'        => (string) $this->resolve_font( $font_name ),
             'size'             => (int) $font_size,
-            'max_width'        => (int) $max_width,
+            'requested_size'   => (int) ( $el['_requested_size'] ?? $font_size ),
+            'min_font_size'    => (int) ( $el['min_font_size'] ?? $font_size ),
+            'max_font_size'    => (int) ( $el['max_font_size'] ?? $font_size ),
+            'auto_scale'       => ! empty( $el['auto_scale'] ),
+            'max_lines'        => (int) ( $el['max_lines'] ?? 0 ),
+            'max_height'       => (int) ( $el['max_height'] ?? 0 ),
+            'line_height'      => (float) ( $el['line_height'] ?? 1.3 ),
+            'letter_spacing'   => (float) ( $el['letter_spacing'] ?? 0 ),
+            'max_width'        => isset( $el['max_width'] ) ? (int) $max_width : 0,
+            'configured_width' => isset( $el['max_width'] ),
+            'align'            => (string) ( $el['align'] ?? 'left' ),
             'bold'             => ! empty( $el['bold'] ),
             'color'            => (string) $color,
             'shadow_color'     => (string) $shadow_color,
@@ -847,20 +937,35 @@ class CPIC_Renderer {
 
         $json_data = wp_json_encode( $payload );
         if ( ! $json_data || false === file_put_contents( $json_path, $json_data ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+            if ( file_exists( $json_path ) ) { wp_delete_file( $json_path ); }
             return false;
         }
 
+        $this->ensure_fontconfig();
         $python = $this->find_python_binary();
         $script = CPIC_PLUGIN_DIR . 'includes/render_text_element.py';
 
-        $cmd = escapeshellarg( $python ) . ' ' . escapeshellarg( $script ) . ' ' . escapeshellarg( $json_path ) . ' ' . escapeshellarg( $out_path ) . ' 2>&1';
+        $cmd = 'FONTCONFIG_FILE=' . escapeshellarg( trailingslashit( wp_upload_dir()['basedir'] ) . 'cpic-fontconfig/fonts.conf' ) . ' XDG_CACHE_HOME=' . escapeshellarg( trailingslashit( wp_upload_dir()['basedir'] ) . 'cpic-fontconfig/cache' ) . ' ' . escapeshellarg( $python ) . ' ' . escapeshellarg( $script ) . ' ' . escapeshellarg( $json_path ) . ' ' . escapeshellarg( $out_path ) . ' 2>&1';
         $out = array();
         $rc  = 1;
         exec( $cmd, $out, $rc ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Controlled shell invocation.
 
         wp_delete_file( $json_path );
+        foreach ( $out as $line ) {
+            if ( 0 === strpos( $line, 'CPIC_DIAGNOSTICS ' ) ) {
+                $diagnostics = json_decode( substr( $line, 17 ), true );
+                if ( is_array( $diagnostics ) ) {
+                    $diagnostics['element'] = $el['id'] ?? '';
+                    self::$last_typography['elements'][] = $diagnostics;
+                    $elements = self::$last_typography['elements'];
+                    self::$last_typography = $diagnostics;
+                    self::$last_typography['elements'] = $elements;
+                }
+            }
+        }
 
         if ( 0 !== (int) $rc || ! file_exists( $out_path ) ) {
+            CPIC_Logger::log( 'imagick', __( 'Pango text rendering failed; checking configured fallback engine.', 'custom-post-image-creator' ), array( 'exit_code' => (int) $rc, 'element' => $el['id'] ?? '' ) );
             if ( file_exists( $out_path ) ) {
                 wp_delete_file( $out_path );
             }
@@ -876,10 +981,12 @@ class CPIC_Renderer {
         $x     = (int) ( $el['x'] ?? 40 );
         $y     = (int) ( $el['y'] ?? 40 );
         $align = $el['align'] ?? 'left';
-        if ( 'center' === $align ) {
-            $x += (int) round( ( $canvas_w - $layer_w ) / 2 );
-        } elseif ( 'right' === $align ) {
-            $x += $canvas_w - $layer_w;
+        if ( empty( $el['max_width'] ) ) {
+            if ( 'center' === $align ) {
+                $x += (int) round( ( $max_width - $layer_w ) / 2 );
+            } elseif ( 'right' === $align ) {
+                $x += $max_width - $layer_w;
+            }
         }
 
         try {
@@ -887,7 +994,7 @@ class CPIC_Renderer {
             $canvas->compositeImage( $layer, Imagick::COMPOSITE_OVER, $x, $y );
             $layer->clear();
             $layer->destroy();
-        } catch ( \Exception $e ) {
+        } catch ( \Throwable $e ) {
             wp_delete_file( $out_path );
             return false;
         }
@@ -907,18 +1014,29 @@ class CPIC_Renderer {
         $conf_file  = $tmp_dir . 'fonts.conf';
         $fonts_dir  = CPIC_PLUGIN_DIR . 'fonts';
 
-        if ( ! file_exists( $tmp_dir ) ) {
-            wp_mkdir_p( $tmp_dir );
-        }
+        if ( ! is_dir( $tmp_dir ) ) { wp_mkdir_p( $tmp_dir ); }
+        wp_mkdir_p( trailingslashit( $tmp_dir ) . 'cache' );
 
         $conf = '<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
 <fontconfig>
-    <dir>' . esc_html( $fonts_dir ) . '</dir>
+    <include>/etc/fonts/fonts.conf</include>
+    <dir>' . htmlspecialchars( $fonts_dir, ENT_XML1, 'UTF-8' ) . '</dir>
+    <cachedir>' . htmlspecialchars( trailingslashit( $tmp_dir ) . 'cache', ENT_XML1, 'UTF-8' ) . '</cachedir>
 </fontconfig>';
 
-        // Always refresh so newly added fonts are picked up.
-        file_put_contents( $conf_file, $conf ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+        $existing = file_exists( $conf_file ) ? file_get_contents( $conf_file ) : false; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+        if ( false === $existing || $existing !== $conf ) {
+            $temporary = $tmp_dir . 'fonts-' . wp_generate_uuid4() . '.tmp';
+            if ( false !== file_put_contents( $temporary, $conf, LOCK_EX ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+                if ( ! @rename( $temporary, $conf_file ) ) {
+                    wp_delete_file( $temporary );
+                    if ( ! file_exists( $conf_file ) ) {
+                        file_put_contents( $conf_file, $conf ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+                    }
+                }
+            }
+        }
 
         putenv( 'FONTCONFIG_PATH=' . $tmp_dir );
         putenv( 'FONTCONFIG_FILE=' . $conf_file );
@@ -953,7 +1071,7 @@ class CPIC_Renderer {
         }
 
         $max_width = (int) ( $el['max_width'] ?? ( $canvas_w - 80 ) );
-        $max_width = min( $max_width, $canvas_w - 10 );
+        $max_width = max( 1, min( $max_width, $canvas_w - max( 0, (int) ( $el['x'] ?? 0 ) ) ) );
 
         $tmp = new Imagick();
         $tmp->newImage( 1, 1, new ImagickPixel( 'transparent' ) );
@@ -996,9 +1114,9 @@ class CPIC_Renderer {
 
         // Alignment.
         if ( 'center' === $align ) {
-            $x += (int) round( ( $canvas_w - $layer_w ) / 2 );
+            $x += (int) round( ( $max_width - $layer_w ) / 2 );
         } elseif ( 'right' === $align ) {
-            $x += $canvas_w - $layer_w;
+            $x += $max_width - $layer_w;
         }
 
         // Shadow (a second pango render offset by shadow_off).
@@ -1036,6 +1154,7 @@ class CPIC_Renderer {
     private function cli_pango_render( $bin, $font_name, $font_size, $color, $bold, $text ) {
         $family = $font_name ? $font_name : 'Noto Serif Bengali';
         $weight = $bold ? 'weight="bold"' : '';
+        $family = htmlspecialchars( (string) $family, ENT_QUOTES | ENT_XML1, 'UTF-8' );
         $size   = max( 1, (int) $font_size ) * 1024;
         $color  = $this->sanitize_color( $color, '#FFFFFF' );
         if ( 8 === strlen( ltrim( $color, '#' ) ) ) {
@@ -1062,7 +1181,7 @@ class CPIC_Renderer {
         try {
             $layer = new Imagick( $tmp_out );
             $layer->setImageFormat( 'png' );
-        } catch ( \Exception $e ) {
+        } catch ( \Throwable $e ) {
             wp_delete_file( $tmp_out );
             return false;
         }
@@ -1226,10 +1345,24 @@ class CPIC_Renderer {
 
     /* ─── Font resolution ──────────────────────────────── */
 
+    private function font_family_for_file( $font_file, $requested ) {
+        $families = array(
+            'NotoSerifBengali-Regular.ttf' => 'Noto Serif Bengali',
+            'NotoSansBengali-Regular.ttf'  => 'Noto Sans Bengali',
+            'HindSiliguri-Regular.ttf'     => 'Hind Siliguri',
+            'SolaimanLipi.ttf'             => 'SolaimanLipi',
+            'SiyamRupali.ttf'              => 'Siyam Rupali',
+        );
+        $basename = $font_file ? basename( $font_file ) : '';
+        return isset( $families[ $basename ] ) ? $families[ $basename ] : ( isset( $families[ basename( $this->resolve_font( $requested ) ) ] ) ? $families[ basename( $this->resolve_font( $requested ) ) ] : 'Noto Serif Bengali' );
+    }
+
     private function resolve_font( $font_name ) {
         $map = array(
             'Noto Serif Bengali' => CPIC_PLUGIN_DIR . 'fonts/NotoSerifBengali-Regular.ttf',
             'Hind Siliguri'      => CPIC_PLUGIN_DIR . 'fonts/HindSiliguri-Regular.ttf',
+            'SolaimanLipi'       => CPIC_PLUGIN_DIR . 'fonts/SolaimanLipi.ttf',
+            'Siyam Rupali'       => CPIC_PLUGIN_DIR . 'fonts/SiyamRupali.ttf',
             'Noto Sans Bengali'  => CPIC_PLUGIN_DIR . 'fonts/NotoSansBengali-Regular.ttf',
         );
 
@@ -1237,9 +1370,11 @@ class CPIC_Renderer {
             return $map[ $font_name ];
         }
 
-        $glob = glob( CPIC_PLUGIN_DIR . 'fonts/*.ttf' );
-        if ( ! empty( $glob ) ) {
-            return $glob[0];
+        // Never choose an arbitrary filesystem result: use a stable Bengali fallback.
+        $fallback = CPIC_PLUGIN_DIR . 'fonts/NotoSerifBengali-Regular.ttf';
+        if ( file_exists( $fallback ) ) {
+            CPIC_Logger::log( 'imagick', __( 'Requested font unavailable; using the bundled Noto Serif Bengali fallback.', 'custom-post-image-creator' ), array( 'font' => $font_name, 'fallback' => $fallback ) );
+            return $fallback;
         }
 
         $system_fonts = array(
