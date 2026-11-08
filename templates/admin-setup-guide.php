@@ -24,6 +24,7 @@ if ( ! defined( 'ABSPATH' ) ) {
         <h2 class="cpic-guide-step"><span class="cpic-guide-num">1</span><?php esc_html_e( 'Check hosting and browser requirements', 'custom-post-image-creator' ); ?></h2>
         <div class="cpic-guide-body">
             <p><?php esc_html_e( 'The plugin does not require server-side Pango, Python, HarfBuzz, ImageMagick, or Imagick. Bengali text is drawn by Canvas 2D in the WordPress admin browser using bundled Unicode fonts.', 'custom-post-image-creator' ); ?></p>
+            <p><?php esc_html_e( 'Template Manager includes SolaimanLipi (regular and bold), Noto Serif Bengali, Hind Siliguri, and Noto Sans Bengali. Font files are loaded before the Canvas paints; a missing or blocked font is shown as a render error rather than silently replaced.', 'custom-post-image-creator' ); ?></p>
             <table class="widefat cpic-guide-table">
                 <thead><tr><th><?php esc_html_e( 'Capability', 'custom-post-image-creator' ); ?></th><th><?php esc_html_e( 'Needed for', 'custom-post-image-creator' ); ?></th><th><?php esc_html_e( 'Status', 'custom-post-image-creator' ); ?></th></tr></thead>
                 <tbody>

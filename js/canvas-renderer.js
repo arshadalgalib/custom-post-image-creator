@@ -6,9 +6,9 @@
         'Noto Serif Bengali': 'NotoSerifBengali-Regular.ttf',
         'Noto Sans Bengali': 'NotoSansBengali-Regular.ttf',
         'Hind Siliguri': 'HindSiliguri-Regular.ttf',
-        'SolaimanLipi': 'SolaimanLipi.ttf',
-        'Siyam Rupali': 'SiyamRupali.ttf'
+        'SolaimanLipi': 'SolaimanLipi.ttf'
     };
+    var FONT_BOLD_FILES = { 'SolaimanLipi': 'SolaimanLipi-Bold.ttf' };
 
     function number(value, fallback) {
         var n = Number(value);
@@ -35,27 +35,35 @@
 
     function fontFamily(name) {
         if (!name) return 'Noto Serif Bengali';
-        if (FONT_FILES[name]) return name;
-        throw new Error('Unsupported font family: ' + name + '. Choose one of the fonts listed in Template Manager and ensure its font file is installed.');
+        var requested = String(name).trim();
+        if (/^solaimani?\s*lipi$/i.test(requested)) return 'SolaimanLipi';
+        if (FONT_FILES[requested]) return requested;
+        throw new Error('Unsupported font family: ' + requested + '. Choose one of the fonts listed in Template Manager and ensure its font file is installed.');
     }
 
     var loadedFonts = {};
+    function loadFontFace(name, file, weight, baseUrl) {
+        var key = name + ':' + weight;
+        if (loadedFonts[key]) return loadedFonts[key];
+        var face = new root.FontFace(name, 'url(' + baseUrl + 'fonts/' + file + ')', { weight: String(weight) });
+        loadedFonts[key] = face.load().then(function (loaded) {
+            root.document.fonts.add(loaded);
+            return loaded;
+        }).catch(function (error) {
+            delete loadedFonts[key];
+            throw new Error('Could not load ' + name + ' ' + weight + ' font from this site. Check the plugin font file and browser CORS policy. ' + error.message);
+        });
+        return loadedFonts[key];
+    }
+
     function ensureFonts(baseUrl, choices) {
         if (typeof root.FontFace !== 'function' || !root.document.fonts) throw new Error('This browser does not support FontFace; use a current Chrome, Edge, Firefox, or Safari browser.');
         var wanted = choices || Object.keys(FONT_FILES);
-        return Promise.all(wanted.map(function (name) {
-            name = fontFamily(name);
-            if (loadedFonts[name]) return loadedFonts[name];
-            var file = FONT_FILES[name];
-            var face = new root.FontFace(name, 'url(' + baseUrl + 'fonts/' + file + ')');
-            loadedFonts[name] = face.load().then(function (loaded) {
-                root.document.fonts.add(loaded);
-                return loaded;
-            }).catch(function (error) {
-                delete loadedFonts[name];
-                throw new Error('Could not load font "' + name + '" from this site. Check the plugin font file and browser CORS policy. ' + error.message);
-            });
-            return loadedFonts[name];
+        var unique = Array.from(new Set(wanted.map(fontFamily)));
+        return Promise.all(unique.map(function (name) {
+            var faces = [loadFontFace(name, FONT_FILES[name], 400, baseUrl)];
+            if (FONT_BOLD_FILES[name]) faces.push(loadFontFace(name, FONT_BOLD_FILES[name], 700, baseUrl));
+            return Promise.all(faces);
         }));
     }
 
@@ -229,7 +237,7 @@
         canvas.width = w; canvas.height = h;
         var ctx = canvas.getContext('2d');
         if (!ctx) return Promise.reject(new Error('Canvas 2D context is unavailable.'));
-        var fonts = ['Noto Serif Bengali'];
+        var fonts = [];
         var images = [];
         var background = canvasCfg.background_type || 'gradient';
         var backgroundPromise = background === 'image' && canvasCfg.background_image ? loadImage(canvasCfg.background_image).then(function (img) { images.push({ background: true, image: img }); }) : Promise.resolve();
@@ -242,7 +250,10 @@
             if (key === 'featured_image' && !url && el.fallback === 'template_image') url = el.fallback_image;
             if (url) jobs.push(loadImage(url).then(function (img) { images.push({ key: key, image: img }); }));
         });
-        Object.keys(elements).forEach(function (key) { if (elements[key] && elements[key].font) fonts.push(elements[key].font); });
+        Object.keys(elements).forEach(function (key) {
+            var el = elements[key];
+            if (el && el.enabled && el.type === 'text') fonts.push(el.font || 'Noto Serif Bengali');
+        });
         var fontPromise;
         try { fontPromise = ensureFonts(options.pluginUrl || '', fonts); }
         catch (fontError) { return Promise.reject(fontError); }

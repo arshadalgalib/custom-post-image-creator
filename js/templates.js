@@ -13,7 +13,7 @@
     var nonce = cpicData.nonce;
     var nf    = cpicData.nonceField;
     var i18n  = cpicData.i18n;
-    var fonts = cpicData.fontChoices || ['Noto Serif Bengali', 'Hind Siliguri', 'Noto Sans Bengali'];
+    var fonts = cpicData.fontChoices || ['SolaimanLipi', 'Noto Serif Bengali', 'Hind Siliguri', 'Noto Sans Bengali'];
 
     var currentTemplate = null; // { id, name, config, ... }
 

@@ -232,9 +232,19 @@ class CPIC_Admin_UI {
                 );
             }
             $common_data['templates']   = $template_data;
-            $common_data['fontChoices'] = array( 'Noto Serif Bengali', 'Hind Siliguri', 'Noto Sans Bengali' );
-            foreach ( array( 'SolaimanLipi' => 'SolaimanLipi.ttf', 'Siyam Rupali' => 'SiyamRupali.ttf' ) as $font_name => $font_file ) {
-                if ( file_exists( CPIC_PLUGIN_DIR . 'fonts/' . $font_file ) ) { $common_data['fontChoices'][] = $font_name; }
+            $common_data['fontChoices'] = array();
+            $available_fonts = array(
+                'SolaimanLipi'       => array( 'SolaimanLipi.ttf', 'SolaimanLipi-Bold.ttf' ),
+                'Noto Serif Bengali' => array( 'NotoSerifBengali-Regular.ttf' ),
+                'Hind Siliguri'      => array( 'HindSiliguri-Regular.ttf' ),
+                'Noto Sans Bengali'  => array( 'NotoSansBengali-Regular.ttf' ),
+            );
+            foreach ( $available_fonts as $font_name => $font_files ) {
+                $files_available = true;
+                foreach ( $font_files as $font_file ) {
+                    if ( ! is_readable( CPIC_PLUGIN_DIR . 'fonts/' . $font_file ) ) { $files_available = false; break; }
+                }
+                if ( $files_available ) { $common_data['fontChoices'][] = $font_name; }
             }
             $common_data['defaultTemplateId'] = (int) CPIC_Settings::get_single( 'cpic_default_template_id' );
             wp_localize_script( 'cpic-templates', 'cpicData', $common_data );

@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, Bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 6.5.1
+Stable tag: 6.5.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -26,7 +26,7 @@ Bengali shaping uses bundled Unicode fonts and the browser's Canvas text engine.
 
 == Installation ==
 
-1. Upload `custom-post-image-creator-6.5.1.zip` via Plugins > Add New > Upload Plugin and activate.
+1. Upload `custom-post-image-creator-6.5.2.zip` via Plugins > Add New > Upload Plugin and activate.
 2. Configure a template, default template, and optional category mappings.
 3. Connect Facebook and/or configure the Telegram bot and channel.
 4. Enable automatic generation only after testing. Save scheduled posts in the WordPress editor so the browser captures their canonical image.
@@ -34,7 +34,7 @@ Bengali shaping uses bundled Unicode fonts and the browser's Canvas text engine.
 
 == Bengali rendering ==
 
-Includes Noto Serif Bengali, Noto Sans Bengali, and Hind Siliguri Unicode fonts. The Canvas renderer supports text alignment, wrapping, headline auto-sizing, max lines/height, image fitting, and layered template elements. Review long Bengali headlines in the target browser. Browser/OS implementations can differ slightly. Cross-origin images must allow CORS; same-site WordPress media is recommended.
+Includes SolaimanLipi, Noto Serif Bengali, Noto Sans Bengali, and Hind Siliguri Unicode fonts. The Canvas renderer supports text alignment, wrapping, headline auto-sizing, max lines/height, image fitting, and layered template elements. Review long Bengali headlines in the target browser. Browser/OS implementations can differ slightly. Cross-origin images must allow CORS; same-site WordPress media is recommended.
 
 == Automation ==
 
@@ -45,6 +45,11 @@ Persistent per-post jobs record each destination independently, use atomic claim
 Artifact endpoints require a WordPress nonce and the current user's edit_post permission. The upload accepts bounded, validated PNG data only and stores it within the plugin-owned uploads subdirectory. Social credentials remain server-side.
 
 == Changelog ==
+
+= 6.5.2 =
+* Bundled the Unicode SolaimanLipi regular and bold fonts with their OFL 1.0 license.
+* Registered SolaimanLipi regular/bold faces explicitly and added Bengali font aliases for existing template configs.
+* Verified SolaimanLipi, Noto Serif Bengali, and Hind Siliguri with a multi-font Bengali Canvas smoke test.
 
 = 6.5.1 =
 * Fixed Canvas bootstrap data ordering on the editor, dashboard, and template screens.
@@ -66,5 +71,5 @@ Artifact endpoints require a WordPress nonce and the current user's edit_post pe
 
 == Upgrade Notice ==
 
-= 6.5.1 =
+= 6.5.2 =
 Existing plugin data is retained. No server-side text shaping packages are required. Save posts in the WordPress editor to capture the browser-rendered PNG needed by automatic publishing.

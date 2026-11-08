@@ -1,5 +1,5 @@
 /**
- * Custom Post Image Creator v6.5.1 – Main JS
+ * Custom Post Image Creator v6.5.2 – Main JS
  *
  * Handles:
  *   - Post loading, filtering, sorting, pagination
