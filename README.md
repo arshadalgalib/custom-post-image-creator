@@ -1,4 +1,4 @@
-# Custom Post Image Creator 6.5.0
+# Custom Post Image Creator 6.5.1
 
 WordPress plugin for template-driven social cards, Bengali typography, category routing, Facebook Page and Telegram publishing, and a persistent background queue.
 
@@ -6,14 +6,14 @@ WordPress plugin for template-driven social cards, Bengali typography, category 
 
 - WordPress 5.8+ and PHP 7.4+.
 - A current admin browser with Canvas 2D, FontFace, and Unicode Bengali fonts (the plugin bundles Noto Serif Bengali, Noto Sans Bengali, and Hind Siliguri).
-- A writable WordPress uploads directory. Generated PNGs are stored in `uploads/cpic-generated/`.
-- PHP cURL for Facebook/Telegram uploads; PHP `ZipArchive` for bulk ZIP downloads. Those two extensions are used only for the corresponding feature.
+- A writable WordPress uploads directory. Generated PNGs are stored in `uploads/cpic-generated/`; PNG uploads are sent in 256 KB chunks (15 MB total maximum) to tolerate typical shared-host request limits.
+- WordPress outbound HTTP access for Facebook/Telegram. PHP cURL is optional; without it, the APIs fetch the public generated-image URL. PHP `ZipArchive` is optional and needed only for bulk ZIP downloads.
 
 **Not required:** PHP Imagick, ImageMagick/Pango, Python, PyGObject, PangoCairo, HarfBuzz packages, or server-level font installation. No system package installation is needed on ordinary shared hosting.
 
 ## Install and configure
 
-1. Upload `custom-post-image-creator-6.5.0.zip` using **Plugins → Add New → Upload Plugin**, then activate.
+1. Upload `custom-post-image-creator-6.5.1.zip` using **Plugins → Add New → Upload Plugin**, then activate.
 2. In **Post Image Creator → Templates**, review or create a template and choose the Bengali font, text boxes, sizes, wrapping, colors, layers, and background.
 3. Configure a default template and optional category mappings.
 4. Connect a Facebook Page and/or enter a Telegram bot token and chat ID. Credentials remain server-side; a blank password field does not clear a saved secret.
@@ -50,13 +50,16 @@ Deactivation and uninstall preserve data by default. Use the deliberate full-pur
 
 - `tests/canvas-renderer-smoke.js` runs the same Canvas renderer module through `@napi-rs/canvas` (Skia) with the bundled Noto fonts. It exercises Bengali conjuncts, vowel signs, reph, mixed Bengali/English, Bengali and ASCII numerals, punctuation, and a long headline.
 - `test-artifacts/bengali-canvas-renderer.png` is the generated PNG from that test and was visually inspected. It demonstrates this Skia Canvas output; it is **not** a real WordPress-browser integration test.
-- The current work environment has no PHP CLI, WordPress test install, or Chromium. Syntax was parsed with `php-parser` configured for PHP 7.4 and JavaScript syntax was checked with Node, but WordPress lifecycle, browser FontFace/CORS behavior, editor save timing, scheduled publishing, cURL integrations, and database migrations still require staging-site testing. No successful Facebook/Telegram integration test is claimed.
+- `tests/canvas-upload-smoke.js` mocks the browser-to-WordPress bridge and verifies authenticated sequential 256 KiB chunks; `tests/admin-assets-smoke.js` guards the editor/dashboard/template data bootstrap ordering. These tests do not run PHP or WordPress.
+- The current work environment has no PHP CLI, WordPress test install, or Chromium. Syntax was parsed with `php-parser` configured for PHP 7.4 and JavaScript syntax was checked with Node, but WordPress lifecycle, browser FontFace/CORS behavior, editor save timing, chunked uploads, scheduled publishing, outbound HTTP/cURL integrations, and database migrations still require staging-site testing. No successful Facebook/Telegram integration test is claimed.
 
 Optional source-checkout renderer smoke test (run in the source repository, not from an installed ZIP):
 
 ```sh
 npm install --no-save @napi-rs/canvas
 node tests/canvas-renderer-smoke.js
+node tests/canvas-upload-smoke.js
+node tests/admin-assets-smoke.js
 ```
 
 The test harness, generated evidence PNG, and test dependency are kept out of the installable plugin ZIP; they are not production requirements.
@@ -65,4 +68,4 @@ The test harness, generated evidence PNG, and test dependency are kept out of th
 
 PHP GD plus Unicode-to-Bijoy conversion was considered but not adopted: conversion/font licensing and mapping correctness (conjuncts, reph, vowel signs, mixed scripts, and metrics) were not adequately verified, and one candidate converter had inconsistent license claims. Browser Canvas retained Unicode and produced visually inspected shaping in the Skia smoke test. Pango/Imagick can shape text when installed, but they are not universal shared-hosting dependencies. Browser-only rendering requires editor participation for background jobs; no browser process is available to WP-Cron. Remote rendering remains a future provider-specific extension.
 
-See `docs/architecture-decision-rendering.md` for the decision record and `docs/release-6.5.0.md` for the phase/test/release checklist and migration notes.
+See `docs/architecture-decision-rendering.md` for the decision record and `docs/release-6.5.1.md` for the phase/test/release checklist and migration notes.

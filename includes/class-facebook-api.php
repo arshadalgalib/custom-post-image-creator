@@ -190,10 +190,6 @@ class CPIC_Facebook_API {
             return new WP_Error( 'fb_not_connected', __( 'Facebook Page is not connected.', 'custom-post-image-creator' ) );
         }
 
-        if ( ! function_exists( 'curl_init' ) || ! class_exists( 'CURLFile' ) ) {
-            return new WP_Error( 'fb_curl_missing', __( 'The cURL PHP extension is required for Facebook sharing.', 'custom-post-image-creator' ) );
-        }
-
         if ( empty( $image_path ) || ! file_exists( $image_path ) ) {
             return new WP_Error( 'fb_image_missing', __( 'Photocard image not found.', 'custom-post-image-creator' ) );
         }
@@ -269,23 +265,39 @@ class CPIC_Facebook_API {
         if ( ! $photo_id ) {
             $url = self::GRAPH_URL . $page_id . '/photos';
 
-            $ch = curl_init( $url );
-            curl_setopt( $ch, CURLOPT_POST, true );
-            curl_setopt( $ch, CURLOPT_POSTFIELDS, array(
-                'access_token' => $page_token,
-                'source'       => new \CURLFile( $image_path, 'image/png', basename( $image_path ) ),
-                // This is media only. The following /feed request is the
-                // one and only public timeline post.
-                'published'    => 0,
-            ) );
-            curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
-            curl_setopt( $ch, CURLOPT_TIMEOUT, 120 );
-            curl_setopt( $ch, CURLOPT_CONNECTTIMEOUT, 30 );
-            curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, true );
-            $raw_response = curl_exec( $ch );
-            $http_code    = curl_getinfo( $ch, CURLINFO_HTTP_CODE );
-            $curl_error   = curl_error( $ch );
-            curl_close( $ch );
+            $curl_error = '';
+            if ( function_exists( 'curl_init' ) && class_exists( 'CURLFile' ) ) {
+                $ch = curl_init( $url );
+                curl_setopt( $ch, CURLOPT_POST, true );
+                curl_setopt( $ch, CURLOPT_POSTFIELDS, array(
+                    'access_token' => $page_token,
+                    'source'       => new \CURLFile( $image_path, 'image/png', basename( $image_path ) ),
+                    'published'    => 0,
+                ) );
+                curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
+                curl_setopt( $ch, CURLOPT_TIMEOUT, 120 );
+                curl_setopt( $ch, CURLOPT_CONNECTTIMEOUT, 30 );
+                curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, true );
+                $raw_response = curl_exec( $ch );
+                $http_code = (int) curl_getinfo( $ch, CURLINFO_HTTP_CODE );
+                $curl_error = curl_error( $ch );
+                curl_close( $ch );
+            } else {
+                // Shared hosts without the PHP cURL extension can let Facebook
+                // fetch the public, plugin-owned image through WordPress HTTP.
+                $photo_url = CPIC_Canvas_Artifacts::public_url_for_path( $image_path );
+                if ( is_wp_error( $photo_url ) ) { return $photo_url; }
+                $response = wp_remote_post( $url, array(
+                    'timeout' => 120,
+                    'body' => array( 'access_token' => $page_token, 'url' => $photo_url, 'published' => 0 ),
+                ) );
+                if ( is_wp_error( $response ) ) {
+                    CPIC_Logger::log( 'facebook', __( 'Facebook HTTP API request failed.', 'custom-post-image-creator' ), $response->get_error_message() );
+                    return new WP_Error( 'fb_curl_error', $response->get_error_message() );
+                }
+                $raw_response = wp_remote_retrieve_body( $response );
+                $http_code = (int) wp_remote_retrieve_response_code( $response );
+            }
 
             if ( $curl_error ) {
                 CPIC_Logger::log( 'facebook', __( 'cURL error.', 'custom-post-image-creator' ), $curl_error );

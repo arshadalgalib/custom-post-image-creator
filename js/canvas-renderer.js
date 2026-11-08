@@ -5,7 +5,9 @@
     var FONT_FILES = {
         'Noto Serif Bengali': 'NotoSerifBengali-Regular.ttf',
         'Noto Sans Bengali': 'NotoSansBengali-Regular.ttf',
-        'Hind Siliguri': 'HindSiliguri-Regular.ttf'
+        'Hind Siliguri': 'HindSiliguri-Regular.ttf',
+        'SolaimanLipi': 'SolaimanLipi.ttf',
+        'Siyam Rupali': 'SiyamRupali.ttf'
     };
 
     function number(value, fallback) {
@@ -23,7 +25,7 @@
     function loadImage(url) {
         return new Promise(function (resolve, reject) {
             if (!url) { resolve(null); return; }
-            var image = new Image();
+            var image = new root.Image();
             image.crossOrigin = 'anonymous';
             image.onload = function () { resolve(image); };
             image.onerror = function () { reject(new Error('Could not load template image: ' + url)); };
@@ -34,7 +36,7 @@
     function fontFamily(name) {
         if (!name) return 'Noto Serif Bengali';
         if (FONT_FILES[name]) return name;
-        throw new Error('Unsupported bundled font family: ' + name + '. Choose Noto Serif Bengali, Noto Sans Bengali, or Hind Siliguri.');
+        throw new Error('Unsupported font family: ' + name + '. Choose one of the fonts listed in Template Manager and ensure its font file is installed.');
     }
 
     var loadedFonts = {};
@@ -45,10 +47,13 @@
             name = fontFamily(name);
             if (loadedFonts[name]) return loadedFonts[name];
             var file = FONT_FILES[name];
-            var face = new FontFace(name, 'url(' + baseUrl + 'fonts/' + file + ')');
+            var face = new root.FontFace(name, 'url(' + baseUrl + 'fonts/' + file + ')');
             loadedFonts[name] = face.load().then(function (loaded) {
-                document.fonts.add(loaded);
+                root.document.fonts.add(loaded);
                 return loaded;
+            }).catch(function (error) {
+                delete loadedFonts[name];
+                throw new Error('Could not load font "' + name + '" from this site. Check the plugin font file and browser CORS policy. ' + error.message);
             });
             return loadedFonts[name];
         }));
@@ -115,12 +120,14 @@
         var lineFactor = Math.max(0.8, Math.min(3, number(el.line_height, 1.3)));
         var size = Math.min(initial, max);
         if (el.auto_scale) {
+            var foundFit = false;
             for (var candidate = max; candidate >= min; candidate -= 1) {
                 ctx.font = (el.bold ? '700 ' : '400 ') + candidate + 'px "' + family + '"';
                 var candidateLines = wrapText(ctx, text, width);
                 var heightFits = maxHeight <= 0 || candidateLines.length * candidate * lineFactor <= maxHeight;
-                if (candidateLines.length <= maxLines && heightFits) { size = candidate; break; }
+                if (candidateLines.length <= maxLines && heightFits) { size = candidate; foundFit = true; break; }
             }
+            if (!foundFit) size = min;
         }
         ctx.font = (el.bold ? '700 ' : '400 ') + size + 'px "' + family + '"';
         return { size: size, lines: wrapText(ctx, text, width) };
@@ -240,7 +247,7 @@
         try { fontPromise = ensureFonts(options.pluginUrl || '', fonts); }
         catch (fontError) { return Promise.reject(fontError); }
         return Promise.all([fontPromise, backgroundPromise].concat(jobs)).then(function () {
-            return document.fonts.ready;
+            return root.document.fonts.ready;
         }).then(function () {
             ctx.clearRect(0, 0, w, h);
             if (images.some(function (item) { return item.background; })) ctx.drawImage(images.filter(function (item) { return item.background; })[0].image, 0, 0, w, h);

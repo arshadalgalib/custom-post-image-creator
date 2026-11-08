@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, Bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 6.5.0
+Stable tag: 6.5.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -20,12 +20,13 @@ Bengali shaping uses bundled Unicode fonts and the browser's Canvas text engine.
 
 * WordPress 5.8 or later; PHP 7.4 or later
 * Current admin browser with Canvas 2D and FontFace support
-* Writable WordPress uploads directory
-* PHP cURL for Facebook/Telegram; PHP ZipArchive for bulk ZIP only
+* Writable WordPress uploads directory (PNG transfers use 256 KB chunks; 15 MB total maximum)
+* WordPress outbound HTTP access for Facebook/Telegram; PHP cURL is optional (without it, the remote API fetches the public generated-image URL)
+* PHP ZipArchive is optional and needed only for bulk ZIP downloads
 
 == Installation ==
 
-1. Upload `custom-post-image-creator-6.5.0.zip` via Plugins > Add New > Upload Plugin and activate.
+1. Upload `custom-post-image-creator-6.5.1.zip` via Plugins > Add New > Upload Plugin and activate.
 2. Configure a template, default template, and optional category mappings.
 3. Connect Facebook and/or configure the Telegram bot and channel.
 4. Enable automatic generation only after testing. Save scheduled posts in the WordPress editor so the browser captures their canonical image.
@@ -45,6 +46,12 @@ Artifact endpoints require a WordPress nonce and the current user's edit_post pe
 
 == Changelog ==
 
+= 6.5.1 =
+* Fixed Canvas bootstrap data ordering on the editor, dashboard, and template screens.
+* Added chunked browser PNG uploads and file-based validation/storage to tolerate modest shared-host request and memory limits.
+* Made Facebook and Telegram publishing work without the PHP cURL extension when the generated image is publicly fetchable; WordPress outbound HTTP is still required.
+* Preserved the canonical browser-rendered PNG for scheduled jobs and made request errors more actionable.
+
 = 6.5.0 =
 * Selected browser Canvas 2D with bundled Unicode Bengali fonts as the canonical rendering path; removed server-side Pango/Imagick/Python requirements and silent renderer fallback.
 * Added shared Canvas renderer for template preview, dashboard preview, editor capture, manual sharing, and bulk output.
@@ -59,5 +66,5 @@ Artifact endpoints require a WordPress nonce and the current user's edit_post pe
 
 == Upgrade Notice ==
 
-= 6.5.0 =
+= 6.5.1 =
 Existing plugin data is retained. No server-side text shaping packages are required. Save posts in the WordPress editor to capture the browser-rendered PNG needed by automatic publishing.

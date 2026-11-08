@@ -39,6 +39,7 @@ class CPIC_Admin_UI {
         /* Browser-rendered canonical artifacts */
         add_action( 'wp_ajax_cpic_render_context', array( $this, 'ajax_render_context' ) );
         add_action( 'wp_ajax_cpic_store_rendered_image', array( $this, 'ajax_store_rendered_image' ) );
+        add_action( 'wp_ajax_cpic_store_rendered_chunk', array( $this, 'ajax_store_rendered_chunk' ) );
 
         /* Dashboard preview */
         add_action( 'wp_ajax_cpic_preview_post', array( $this, 'ajax_preview_post' ) );
@@ -141,22 +142,6 @@ class CPIC_Admin_UI {
         unset( $safe_settings['cpic_tg_bot_token'] );
         unset( $safe_settings['cpic_tg_chat_id'] );
 
-        if ( ! $is_dashboard ) {
-            if ( $is_editor ) {
-                $common_data['isEditor'] = true;
-                $common_data['postId'] = isset( $_GET['post'] ) ? absint( $_GET['post'] ) : 0;
-                wp_enqueue_script( 'cpic-canvas-renderer', CPIC_PLUGIN_URL . 'js/canvas-renderer.js', array(), CPIC_VERSION, true );
-                wp_enqueue_script( 'cpic-canvas', CPIC_PLUGIN_URL . 'js/cpic-canvas.js', array( 'jquery', 'cpic-canvas-renderer', 'wp-data' ), CPIC_VERSION, true );
-                wp_localize_script( 'cpic-canvas', 'cpicData', $common_data );
-            }
-            return;
-        }
-
-        $tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'dashboard';
-
-        /* ── CSS ───────────────────────────────────────── */
-        wp_enqueue_style( 'wp-color-picker' );
-        wp_enqueue_style( 'cpic-style', CPIC_PLUGIN_URL . 'css/cpic-style.css', array(), CPIC_VERSION );
 
         /* ── Common data ───────────────────────────────── */
         $common_data = array(
@@ -174,6 +159,9 @@ class CPIC_Admin_UI {
                 'fbSuccess'     => __( 'Posted to Facebook.', 'custom-post-image-creator' ),
                 'tgSuccess'     => __( 'Sent to Telegram.', 'custom-post-image-creator' ),
                 'confirmDelete' => __( 'Delete this template? Category mappings will be removed too.', 'custom-post-image-creator' ),
+                'canvasSaving'  => __( 'Saving browser-rendered card…', 'custom-post-image-creator' ),
+                'canvasSaved'   => __( 'Browser-rendered card saved. Automatic publishing can now reuse this image.', 'custom-post-image-creator' ),
+                'canvasSaveFailed' => __( 'Could not save the browser-rendered card.', 'custom-post-image-creator' ),
             ),
             'banglaDigits' => array( '০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯' ),
             'banglaMonths' => array(
@@ -191,6 +179,24 @@ class CPIC_Admin_UI {
                 'December'  => 'ডিসেম্বর',
             ),
         );
+        if ( ! $is_dashboard ) {
+            if ( $is_editor ) {
+                $common_data['isEditor'] = true;
+                $common_data['postId'] = isset( $_GET['post'] ) ? absint( $_GET['post'] ) : 0;
+                wp_enqueue_script( 'cpic-canvas-renderer', CPIC_PLUGIN_URL . 'js/canvas-renderer.js', array(), CPIC_VERSION, true );
+                wp_enqueue_script( 'cpic-canvas', CPIC_PLUGIN_URL . 'js/cpic-canvas.js', array( 'jquery', 'cpic-canvas-renderer', 'wp-data' ), CPIC_VERSION, true );
+                wp_localize_script( 'cpic-canvas', 'cpicData', $common_data );
+            }
+            return;
+        }
+
+        $tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'dashboard';
+
+        /* ── CSS ───────────────────────────────────────── */
+        wp_enqueue_style( 'wp-color-picker' );
+        wp_enqueue_style( 'cpic-style', CPIC_PLUGIN_URL . 'css/cpic-style.css', array(), CPIC_VERSION );
+
+
 
         /* ── Dashboard (legacy canvas editor) ───────────── */
         if ( 'dashboard' === $tab ) {
@@ -198,6 +204,7 @@ class CPIC_Admin_UI {
             wp_enqueue_script( 'wp-color-picker' );
             wp_enqueue_script( 'cpic-canvas-renderer', CPIC_PLUGIN_URL . 'js/canvas-renderer.js', array(), CPIC_VERSION, true );
             wp_enqueue_script( 'cpic-canvas', CPIC_PLUGIN_URL . 'js/cpic-canvas.js', array( 'jquery', 'cpic-canvas-renderer' ), CPIC_VERSION, true );
+            wp_localize_script( 'cpic-canvas', 'cpicData', $common_data );
             wp_enqueue_script( 'cpic-script', CPIC_PLUGIN_URL . 'js/cpic-script.js', array( 'jquery', 'wp-color-picker', 'cpic-canvas' ), CPIC_VERSION, true );
             wp_enqueue_script( 'cpic-bulk', CPIC_PLUGIN_URL . 'js/bulk-processing.js', array( 'cpic-script' ), CPIC_VERSION, true );
             wp_localize_script( 'cpic-script', 'cpicData', $common_data );
@@ -209,6 +216,7 @@ class CPIC_Admin_UI {
             wp_enqueue_script( 'wp-color-picker' );
             wp_enqueue_script( 'cpic-canvas-renderer', CPIC_PLUGIN_URL . 'js/canvas-renderer.js', array(), CPIC_VERSION, true );
             wp_enqueue_script( 'cpic-canvas', CPIC_PLUGIN_URL . 'js/cpic-canvas.js', array( 'jquery', 'cpic-canvas-renderer' ), CPIC_VERSION, true );
+            wp_localize_script( 'cpic-canvas', 'cpicData', $common_data );
             wp_enqueue_script( 'cpic-templates', CPIC_PLUGIN_URL . 'js/templates.js', array( 'jquery', 'wp-color-picker', 'cpic-canvas' ), CPIC_VERSION, true );
 
             $templates = CPIC_Template_Manager::get_templates();
@@ -660,16 +668,77 @@ class CPIC_Admin_UI {
         }
         $tmp_file = $_FILES['image']['tmp_name'];
         if ( ! is_uploaded_file( $tmp_file ) ) { wp_send_json_error( array( 'message' => __( 'Uploaded PNG could not be verified.', 'custom-post-image-creator' ) ) ); }
-        $size = (int) filesize( $tmp_file );
-        if ( $size < 24 || $size > 15 * MB_IN_BYTES ) { wp_send_json_error( array( 'message' => __( 'The PNG must be 15 MB or smaller.', 'custom-post-image-creator' ) ) ); }
-        $bytes = file_get_contents( $tmp_file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
-        if ( false === $bytes ) { wp_send_json_error( array( 'message' => __( 'Could not read uploaded PNG.', 'custom-post-image-creator' ) ) ); }
-        $result = CPIC_Canvas_Artifacts::save_for_post(
+        $result = CPIC_Canvas_Artifacts::save_file_for_post(
             $post_id,
-            $bytes,
+            $tmp_file,
             isset( $_POST['template_hash'] ) ? sanitize_text_field( wp_unslash( $_POST['template_hash'] ) ) : '',
             isset( $_POST['input_hash'] ) ? sanitize_text_field( wp_unslash( $_POST['input_hash'] ) ) : ''
         );
+        if ( is_wp_error( $result ) ) { wp_send_json_error( array( 'message' => $result->get_error_message() ) ); }
+        wp_send_json_success( $result );
+    }
+
+    /** Receive small sequential chunks so shared-host PHP request limits need not accept a full PNG. */
+    public function ajax_store_rendered_chunk() {
+        $post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0;
+        $this->verify_render_request( $post_id );
+        if ( ! get_post( $post_id ) ) { wp_send_json_error( array( 'message' => __( 'Invalid post or permission denied.', 'custom-post-image-creator' ) ), 403 ); }
+        if ( empty( $_FILES['chunk']['tmp_name'] ) || ! isset( $_FILES['chunk']['error'] ) || UPLOAD_ERR_OK !== (int) $_FILES['chunk']['error'] || ! is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
+            wp_send_json_error( array( 'message' => __( 'A PNG upload chunk failed. Check the host upload-size limit and retry.', 'custom-post-image-creator' ) ) );
+        }
+
+        $chunk_bytes = 256 * 1024;
+        $transfer = isset( $_POST['transfer_id'] ) ? strtolower( sanitize_text_field( wp_unslash( $_POST['transfer_id'] ) ) ) : '';
+        $transfer = preg_match( '/^[a-f0-9]{32}$/', $transfer ) ? $transfer : '';
+        $index = isset( $_POST['chunk_index'] ) ? (int) wp_unslash( $_POST['chunk_index'] ) : -1;
+        $count = isset( $_POST['chunk_count'] ) ? absint( $_POST['chunk_count'] ) : 0;
+        $total_size = isset( $_POST['total_size'] ) ? absint( $_POST['total_size'] ) : 0;
+        if ( ! $transfer || $total_size < 24 || $total_size > 15 * MB_IN_BYTES || $count < 1 || $count > 60 || $count !== (int) ceil( $total_size / $chunk_bytes ) || $index < 0 || $index >= $count ) {
+            wp_send_json_error( array( 'message' => __( 'The PNG upload session is invalid. Render the image again.', 'custom-post-image-creator' ) ) );
+        }
+        $tmp_file = $_FILES['chunk']['tmp_name'];
+        $expected_size = min( $chunk_bytes, $total_size - ( $index * $chunk_bytes ) );
+        if ( (int) filesize( $tmp_file ) !== $expected_size ) { wp_send_json_error( array( 'message' => __( 'An upload chunk was incomplete. Render the image again.', 'custom-post-image-creator' ) ) ); }
+
+        $upload = wp_upload_dir();
+        $staging = trailingslashit( $upload['basedir'] ) . 'cpic-generated/.staging/';
+        if ( ! wp_mkdir_p( $staging ) || ! is_writable( $staging ) ) { wp_send_json_error( array( 'message' => __( 'The temporary upload directory is not writable.', 'custom-post-image-creator' ) ) ); }
+        if ( ! file_exists( $staging . 'index.php' ) ) { file_put_contents( $staging . 'index.php', "<?php\nexit;\n", LOCK_EX ); }
+        if ( ! file_exists( $staging . '.htaccess' ) ) { file_put_contents( $staging . '.htaccess', "Options -Indexes\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n", LOCK_EX ); }
+        if ( ! file_exists( $staging . 'web.config' ) ) { file_put_contents( $staging . 'web.config', "<?xml version=\"1.0\"?><configuration><system.webServer><security><authorization><clear/><add accessType=\"Deny\" users=\"*\"/></authorization></security></system.webServer></configuration>", LOCK_EX ); }
+        foreach ( (array) glob( $staging . 'cpic-u*-p*-*' ) as $stale ) { if ( is_file( $stale ) && filemtime( $stale ) < time() - DAY_IN_SECONDS ) { wp_delete_file( $stale ); } }
+
+        $prefix = 'cpic-u' . get_current_user_id() . '-p' . $post_id . '-' . $transfer;
+        $part = $staging . $prefix . '-' . sprintf( '%03d', $index ) . '.part';
+        if ( is_file( $part ) ) {
+            if ( (int) filesize( $part ) !== $expected_size || hash_file( 'sha256', $part ) !== hash_file( 'sha256', $tmp_file ) ) { wp_send_json_error( array( 'message' => __( 'Conflicting data was received for an upload chunk.', 'custom-post-image-creator' ) ) ); }
+        } elseif ( ! move_uploaded_file( $tmp_file, $part ) ) {
+            wp_send_json_error( array( 'message' => __( 'Could not store an upload chunk. Check uploads-directory permissions.', 'custom-post-image-creator' ) ) );
+        }
+
+        if ( $index !== $count - 1 ) { wp_send_json_success( array( 'received' => $index + 1, 'total' => $count ) ); }
+        $assembled = $staging . $prefix . '-assembled.png';
+        $output = fopen( $assembled, 'wb' );
+        if ( ! $output ) { wp_send_json_error( array( 'message' => __( 'Could not assemble the PNG upload.', 'custom-post-image-creator' ) ) ); }
+        $assembled_size = 0;
+        for ( $part_index = 0; $part_index < $count; $part_index++ ) {
+            $part_path = $staging . $prefix . '-' . sprintf( '%03d', $part_index ) . '.part';
+            if ( ! is_file( $part_path ) ) { fclose( $output ); wp_delete_file( $assembled ); wp_send_json_error( array( 'message' => __( 'The PNG upload is missing a chunk. Render the image again.', 'custom-post-image-creator' ) ) ); }
+            $input = fopen( $part_path, 'rb' );
+            if ( ! $input ) { fclose( $output ); wp_delete_file( $assembled ); wp_send_json_error( array( 'message' => __( 'Could not read an upload chunk.', 'custom-post-image-creator' ) ) ); }
+            $assembled_size += stream_copy_to_stream( $input, $output );
+            fclose( $input );
+        }
+        fclose( $output );
+        if ( $assembled_size !== $total_size ) { wp_delete_file( $assembled ); wp_send_json_error( array( 'message' => __( 'The assembled PNG size did not match. Render the image again.', 'custom-post-image-creator' ) ) ); }
+        $result = CPIC_Canvas_Artifacts::save_file_for_post(
+            $post_id,
+            $assembled,
+            isset( $_POST['template_hash'] ) ? sanitize_text_field( wp_unslash( $_POST['template_hash'] ) ) : '',
+            isset( $_POST['input_hash'] ) ? sanitize_text_field( wp_unslash( $_POST['input_hash'] ) ) : ''
+        );
+        wp_delete_file( $assembled );
+        for ( $part_index = 0; $part_index < $count; $part_index++ ) { wp_delete_file( $staging . $prefix . '-' . sprintf( '%03d', $part_index ) . '.part' ); }
         if ( is_wp_error( $result ) ) { wp_send_json_error( array( 'message' => $result->get_error_message() ) ); }
         wp_send_json_success( $result );
     }

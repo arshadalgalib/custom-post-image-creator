@@ -3,7 +3,7 @@
  * Plugin Name: Custom Post Image Creator
  * Plugin URI:  https://developer.wordpress.org/plugins/
  * Description: Template-driven social photocards with Unicode Bengali Canvas rendering, category mappings, Facebook and Telegram publishing, and a persistent queue that reuses browser-captured PNGs.
- * Version:     6.5.0
+ * Version:     6.5.1
  * Author:      CPIC Dev Team
  * Author URI:  https://developer.wordpress.org/
  * License:     GPL-2.0-or-later
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /* ─── Constants ─────────────────────────────────────────────── */
-define( 'CPIC_VERSION', '6.5.0' );
+define( 'CPIC_VERSION', '6.5.1' );
 define( 'CPIC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'CPIC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'CPIC_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );

@@ -90,10 +90,6 @@ class CPIC_Telegram_API {
             return new WP_Error( 'tg_not_configured', __( 'Telegram is not configured.', 'custom-post-image-creator' ) );
         }
 
-        if ( ! function_exists( 'curl_init' ) || ! class_exists( 'CURLFile' ) ) {
-            return new WP_Error( 'tg_curl_missing', __( 'The cURL PHP extension is required for Telegram sharing.', 'custom-post-image-creator' ) );
-        }
-
         // Duplicate check.
         $last = get_post_meta( $post_id, 'cpic_last_shared_to_telegram', true );
         if ( $last && ( time() - strtotime( $last ) ) < 60 ) {
@@ -109,7 +105,7 @@ class CPIC_Telegram_API {
         // Build caption (max 1024 chars).
         $caption = $this->build_caption( $post_id );
 
-        // Send photo via cURL with CURLFile for reliable binary handling.
+        // Prefer direct binary transfer; use the WordPress HTTP URL fallback when cURL is absent.
         $url = self::API_BASE . $token . '/sendPhoto';
 
         $lock_key = 'cpic_tg_publish_lock_' . (int) $post_id;
@@ -125,22 +121,41 @@ class CPIC_Telegram_API {
             return new WP_Error( 'tg_busy', __( 'A Telegram publication for this post is already in progress.', 'custom-post-image-creator' ) );
         }
 
-        $ch = curl_init( $url );
-        curl_setopt( $ch, CURLOPT_POST, true );
-        curl_setopt( $ch, CURLOPT_POSTFIELDS, array(
-            'chat_id'    => $chat_id,
-            'caption'    => $caption,
-            'parse_mode' => 'HTML',
-            'photo'      => new \CURLFile( $image_path, 'image/png', basename( $image_path ) ),
-        ) );
-        curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
-        curl_setopt( $ch, CURLOPT_TIMEOUT, 120 );
-        curl_setopt( $ch, CURLOPT_CONNECTTIMEOUT, 30 );
-        curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, true );
-        $raw_response = curl_exec( $ch );
-        $curl_error   = curl_error( $ch );
-        $http_code    = (int) curl_getinfo( $ch, CURLINFO_HTTP_CODE );
-        curl_close( $ch );
+        $curl_error = '';
+        if ( function_exists( 'curl_init' ) && class_exists( 'CURLFile' ) ) {
+            $ch = curl_init( $url );
+            curl_setopt( $ch, CURLOPT_POST, true );
+            curl_setopt( $ch, CURLOPT_POSTFIELDS, array(
+                'chat_id'    => $chat_id,
+                'caption'    => $caption,
+                'parse_mode' => 'HTML',
+                'photo'      => new \CURLFile( $image_path, 'image/png', basename( $image_path ) ),
+            ) );
+            curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
+            curl_setopt( $ch, CURLOPT_TIMEOUT, 120 );
+            curl_setopt( $ch, CURLOPT_CONNECTTIMEOUT, 30 );
+            curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, true );
+            $raw_response = curl_exec( $ch );
+            $curl_error   = curl_error( $ch );
+            $http_code    = (int) curl_getinfo( $ch, CURLINFO_HTTP_CODE );
+            curl_close( $ch );
+        } else {
+            // Telegram can fetch the public generated URL when PHP cURL is
+            // disabled. WordPress HTTP API uses the host's configured transport.
+            $photo_url = CPIC_Canvas_Artifacts::public_url_for_path( $image_path );
+            if ( is_wp_error( $photo_url ) ) { delete_option( $lock_key ); return $photo_url; }
+            $response = wp_remote_post( $url, array(
+                'timeout' => 120,
+                'body' => array( 'chat_id' => $chat_id, 'caption' => $caption, 'parse_mode' => 'HTML', 'photo' => $photo_url ),
+            ) );
+            if ( is_wp_error( $response ) ) {
+                // The outcome is ambiguous, so keep the duplicate-prevention lock.
+                CPIC_Logger::log( 'telegram', __( 'Telegram HTTP API request failed; outcome is ambiguous.', 'custom-post-image-creator' ), array( 'post_id' => (int) $post_id, 'error' => $response->get_error_message() ) );
+                return new WP_Error( 'tg_curl_error', __( 'Telegram request failed at the transport layer; check the channel before retrying.', 'custom-post-image-creator' ) );
+            }
+            $raw_response = wp_remote_retrieve_body( $response );
+            $http_code = (int) wp_remote_retrieve_response_code( $response );
+        }
 
         if ( $curl_error ) {
             // Keep the lock after an ambiguous transport outcome to avoid a duplicate message.

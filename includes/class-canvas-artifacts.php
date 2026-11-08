@@ -39,33 +39,49 @@ class CPIC_Canvas_Artifacts {
         );
     }
 
-    /** Validate, persist, and associate a browser-generated PNG with a post. */
+    /** Compatibility wrapper for integrations that already hold PNG bytes. */
     public static function save_for_post( $post_id, $png_data, $template_hash, $input_hash ) {
+        if ( ! is_string( $png_data ) || strlen( $png_data ) < 24 || strlen( $png_data ) > 15 * MB_IN_BYTES ) {
+            return new WP_Error( 'invalid_image_size', __( 'PNG must be between 24 bytes and 15 MB.', 'custom-post-image-creator' ) );
+        }
+        $tmp = wp_tempnam( 'cpic-render-' );
+        if ( ! $tmp || false === file_put_contents( $tmp, $png_data, LOCK_EX ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+            if ( $tmp && is_file( $tmp ) ) { wp_delete_file( $tmp ); }
+            return new WP_Error( 'image_write_failed', __( 'Could not prepare uploaded PNG.', 'custom-post-image-creator' ) );
+        }
+        $saved = self::save_file_for_post( $post_id, $tmp, $template_hash, $input_hash );
+        wp_delete_file( $tmp );
+        return $saved;
+    }
+
+    /** Validate, persist, and associate a PNG file without loading the whole image into PHP memory. */
+    public static function save_file_for_post( $post_id, $source_path, $template_hash, $input_hash ) {
         $context = self::context_for_post( $post_id );
         if ( is_wp_error( $context ) ) { return $context; }
         if ( ! hash_equals( $context['template_hash'], (string) $template_hash ) || ! hash_equals( $context['input_hash'], (string) $input_hash ) ) {
             return new WP_Error( 'stale_render', __( 'The post or template changed while rendering. Refresh and render again.', 'custom-post-image-creator' ) );
         }
-        if ( ! is_string( $png_data ) || strlen( $png_data ) < 24 || strlen( $png_data ) > 15 * MB_IN_BYTES ) {
-            return new WP_Error( 'invalid_image_size', __( 'PNG must be between 24 bytes and 15 MB.', 'custom-post-image-creator' ) );
-        }
-        if ( substr( $png_data, 0, 8 ) !== "\x89PNG\r\n\x1a\n" || ! function_exists( 'getimagesizefromstring' ) ) {
-            return new WP_Error( 'invalid_png', __( 'The uploaded image is not a valid PNG.', 'custom-post-image-creator' ) );
-        }
-        $image_info = @getimagesizefromstring( $png_data );
-        if ( ! is_array( $image_info ) || IMAGETYPE_PNG !== (int) $image_info[2] || $image_info[0] < 64 || $image_info[1] < 64 || $image_info[0] > 4096 || $image_info[1] > 4096 ) {
+        if ( ! is_file( $source_path ) || ! is_readable( $source_path ) ) { return new WP_Error( 'invalid_png', __( 'The uploaded PNG is unavailable.', 'custom-post-image-creator' ) ); }
+        if ( ! function_exists( 'getimagesize' ) || ! function_exists( 'hash_file' ) ) { return new WP_Error( 'image_validation_unavailable', __( 'This PHP host does not provide the basic file-inspection functions needed to validate images.', 'custom-post-image-creator' ) ); }
+        $size = (int) filesize( $source_path );
+        if ( $size < 24 || $size > 15 * MB_IN_BYTES ) { return new WP_Error( 'invalid_image_size', __( 'PNG must be between 24 bytes and 15 MB.', 'custom-post-image-creator' ) ); }
+        $handle = fopen( $source_path, 'rb' );
+        $signature = $handle ? fread( $handle, 8 ) : '';
+        if ( $handle ) { fclose( $handle ); }
+        $image_info = @getimagesize( $source_path );
+        if ( "\x89PNG\r\n\x1a\n" !== $signature || ! is_array( $image_info ) || IMAGETYPE_PNG !== (int) $image_info[2] || $image_info[0] < 64 || $image_info[1] < 64 || $image_info[0] > 4096 || $image_info[1] > 4096 ) {
             return new WP_Error( 'invalid_png_dimensions', __( 'PNG dimensions must be between 64 and 4096 pixels.', 'custom-post-image-creator' ) );
         }
+        $sha = hash_file( 'sha256', $source_path );
+        if ( ! $sha ) { return new WP_Error( 'invalid_png', __( 'Could not verify PNG checksum.', 'custom-post-image-creator' ) ); }
         $upload = wp_upload_dir();
         $dir = trailingslashit( $upload['basedir'] ) . 'cpic-generated/';
         if ( ! wp_mkdir_p( $dir ) || ! is_writable( $dir ) ) { return new WP_Error( 'upload_dir_unwritable', __( 'The generated-image directory is not writable.', 'custom-post-image-creator' ) ); }
-        $sha = hash( 'sha256', $png_data );
         $filename = 'cpic-' . absint( $post_id ) . '-' . substr( $sha, 0, 20 ) . '.png';
         $path = $dir . $filename;
         if ( is_link( $path ) ) { return new WP_Error( 'unsafe_image_path', __( 'Generated-image path is not a regular file.', 'custom-post-image-creator' ) ); }
         if ( ! is_file( $path ) || hash_file( 'sha256', $path ) !== $sha ) {
-            $written = @file_put_contents( $path, $png_data, LOCK_EX ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-            if ( false === $written || $written !== strlen( $png_data ) || hash_file( 'sha256', $path ) !== $sha ) { return new WP_Error( 'image_write_failed', __( 'Could not save generated PNG.', 'custom-post-image-creator' ) ); }
+            if ( ! @copy( $source_path, $path ) || hash_file( 'sha256', $path ) !== $sha ) { return new WP_Error( 'image_write_failed', __( 'Could not save generated PNG.', 'custom-post-image-creator' ) ); }
         }
         $url = trailingslashit( $upload['baseurl'] ) . 'cpic-generated/' . rawurlencode( $filename );
         update_post_meta( $post_id, '_cpic_rendered_image_path', $path );
@@ -128,16 +144,30 @@ class CPIC_Canvas_Artifacts {
         }
     }
 
+    /** Return the public uploads URL for a file owned by the generated-image directory. */
+    public static function public_url_for_path( $path ) {
+        $upload = wp_upload_dir();
+        $base = realpath( trailingslashit( $upload['basedir'] ) . 'cpic-generated' );
+        $real = is_string( $path ) && $path ? realpath( $path ) : false;
+        $prefix = $base ? trailingslashit( $base ) : '';
+        if ( ! $real || ! $base || 0 !== strpos( $real, $prefix ) || ! is_file( $real ) ) {
+            return new WP_Error( 'invalid_generated_path', __( 'The generated image is not inside the plugin uploads directory.', 'custom-post-image-creator' ) );
+        }
+        return trailingslashit( $upload['baseurl'] ) . 'cpic-generated/' . rawurlencode( basename( $real ) );
+    }
+
     public static function current_for_post( $post_id ) {
+        if ( ! function_exists( 'hash_file' ) ) { return new WP_Error( 'image_validation_unavailable', __( 'This PHP host does not provide file-checksum support needed to verify generated images.', 'custom-post-image-creator' ) ); }
         $context = self::context_for_post( $post_id );
         if ( is_wp_error( $context ) ) { return $context; }
         $path = get_post_meta( $post_id, '_cpic_rendered_image_path', true );
         $url = get_post_meta( $post_id, '_cpic_rendered_image_url', true );
         $upload = wp_upload_dir();
         $base = realpath( trailingslashit( $upload['basedir'] ) . 'cpic-generated' );
-        $real = $path ? realpath( $path ) : false;
+        $real = is_string( $path ) && $path ? realpath( $path ) : false;
         $root_prefix = $base ? trailingslashit( $base ) : '';
         $saved_sha = get_post_meta( $post_id, '_cpic_render_artifact_sha256', true );
+        if ( ! is_string( $saved_sha ) ) { $saved_sha = ''; }
         $actual_sha = $real && is_file( $real ) ? (string) hash_file( 'sha256', $real ) : '';
         $expected_url = $real ? trailingslashit( $upload['baseurl'] ) . 'cpic-generated/' . rawurlencode( basename( $real ) ) : '';
         if ( ! $real || ! $base || 0 !== strpos( $real, $root_prefix ) || ! $url || $url !== $expected_url || ! $saved_sha || ! hash_equals( $saved_sha, $actual_sha ) || get_post_meta( $post_id, '_cpic_render_template_hash', true ) !== $context['template_hash'] || get_post_meta( $post_id, '_cpic_render_input_hash', true ) !== $context['input_hash'] ) {
