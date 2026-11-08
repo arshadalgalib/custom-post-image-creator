@@ -48,7 +48,8 @@
 
         jobs.forEach(function (job) {
             var cls = job.status === 'failed' ? 'cpic-disconnected' : 'cpic-connected';
-            var img = job.image_url ? '<a href="' + job.image_url + '" target="_blank" rel="noopener">View</a>' : '—';
+            var imageUrl = safeHttpUrl(job.image_url);
+            var img = imageUrl ? '<a href="' + escapeHtml(imageUrl) + '" target="_blank" rel="noopener">View</a>' : '—';
             var fb = job.facebook_post_id ? job.facebook_post_id : '—';
             var err = job.last_error ? job.last_error : '—';
             var actions =
@@ -60,7 +61,7 @@
                 '<tr>' +
                 '<td><strong>' + escapeHtml(job.post_title) + '</strong><br /><small>#' + job.post_id + '</small></td>' +
                 '<td>' + escapeHtml(job.template_name || '—') + '</td>' +
-                '<td><span class="' + cls + '">' + statusBadge(job.status) + '</span><br /><small>' + img + '</small></td>' +
+                '<td><span class="' + cls + '">' + escapeHtml(statusBadge(job.status)) + '</span><br /><small>' + img + '</small></td>' +
                 '<td>' + job.attempts + ' / ' + job.max_retries + '</td>' +
                 '<td>' + escapeHtml(fb) + '<br /><small>Comment: ' + escapeHtml(job.facebook_comment_id || '—') + '</small></td>' +
                 '<td>' + escapeHtml(err) + '</td>' +
@@ -69,6 +70,16 @@
                 '</tr>'
             );
         });
+    }
+
+    function safeHttpUrl(value) {
+        if (!value) return '';
+        try {
+            var url = new URL(String(value), window.location.href);
+            return (url.protocol === 'http:' || url.protocol === 'https:') ? url.href : '';
+        } catch (error) {
+            return '';
+        }
     }
 
     function escapeHtml(str) {

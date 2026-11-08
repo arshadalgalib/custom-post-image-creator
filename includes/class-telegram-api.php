@@ -90,10 +90,14 @@ class CPIC_Telegram_API {
             return new WP_Error( 'tg_not_configured', __( 'Telegram is not configured.', 'custom-post-image-creator' ) );
         }
 
-        // Duplicate check.
+        // Duplicate check. The saved MySQL datetime is in the site's timezone,
+        // while PHP's default timezone is UTC inside WordPress.
         $last = get_post_meta( $post_id, 'cpic_last_shared_to_telegram', true );
-        if ( $last && ( time() - strtotime( $last ) ) < 60 ) {
-            return new WP_Error( 'tg_duplicate', __( 'This post was shared to Telegram less than a minute ago.', 'custom-post-image-creator' ) );
+        if ( $last ) {
+            $last_datetime = \DateTimeImmutable::createFromFormat( '!Y-m-d H:i:s', (string) $last, wp_timezone() );
+            if ( $last_datetime && abs( time() - $last_datetime->getTimestamp() ) < 60 ) {
+                return new WP_Error( 'tg_duplicate', __( 'This post was shared to Telegram less than a minute ago.', 'custom-post-image-creator' ) );
+            }
         }
 
         if ( empty( $image_path ) || ! is_file( $image_path ) ) {
@@ -210,7 +214,7 @@ class CPIC_Telegram_API {
     /** Truncate on grapheme boundaries while respecting a code-point limit. */
     private function utf8_slice( $value, $length ) {
         $length = max( 0, (int) $length );
-        if ( preg_match_all( '/\\X/u', (string) $value, $matches ) ) {
+        if ( preg_match_all( '/\X/u', (string) $value, $matches ) ) {
             $result = '';
             $used = 0;
             foreach ( $matches[0] as $grapheme ) {

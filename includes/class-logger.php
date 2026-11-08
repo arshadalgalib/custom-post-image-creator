@@ -124,7 +124,8 @@ class CPIC_Logger {
     public static function prune( $days = 30 ) {
         global $wpdb;
         $table = $wpdb->prefix . 'cpic_logs';
-        $cut   = gmdate( 'Y-m-d H:i:s', time() - ( (int) $days * DAY_IN_SECONDS ) );
+        // Log timestamps use current_time('mysql') in the site timezone.
+        $cut   = wp_date( 'Y-m-d H:i:s', time() - ( (int) $days * DAY_IN_SECONDS ), wp_timezone() );
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery
         return (bool) $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE created_at < %s", $cut ) );
     }

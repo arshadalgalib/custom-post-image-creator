@@ -146,6 +146,7 @@ class CPIC_Admin_UI {
         /* ── Common data ───────────────────────────────── */
         $common_data = array(
             'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+            'oauthStartUrl' => add_query_arg( array( 'action' => 'cpic_fb_oauth_start', '_wpnonce' => wp_create_nonce( 'cpic_fb_oauth_start' ) ), admin_url( 'admin-post.php' ) ),
             'nonce'      => wp_create_nonce( CPIC_Security::NONCE_ACTION ),
             'nonceField' => CPIC_Security::NONCE_FIELD,
             'pluginUrl'  => CPIC_PLUGIN_URL,
@@ -539,11 +540,6 @@ class CPIC_Admin_UI {
     public function ajax_get_jobs() {
         cpic()->security->verify_ajax_request();
 
-        // Process any pending jobs while we're here (shared hosting cron backup).
-        if ( CPIC_Settings::get_single( 'cpic_auto_generate', 0 ) ) {
-            cpic()->automation->process_due_jobs( 5 );
-        }
-
         $status = isset( $_POST['status'] ) ? sanitize_key( wp_unslash( $_POST['status'] ) ) : '';
         $jobs   = cpic()->queue->get_jobs( $status, 100, 0 );
 
@@ -711,7 +707,9 @@ class CPIC_Admin_UI {
         if ( (int) filesize( $tmp_file ) !== $expected_size ) { wp_send_json_error( array( 'message' => __( 'An upload chunk was incomplete. Render the image again.', 'custom-post-image-creator' ) ) ); }
 
         $upload = wp_upload_dir();
-        $staging = trailingslashit( $upload['basedir'] ) . 'cpic-generated/.staging/';
+        $staging_root = trailingslashit( $upload['basedir'] ) . 'cpic-generated/.staging';
+        if ( is_link( $staging_root ) ) { wp_send_json_error( array( 'message' => __( 'The temporary upload directory is unsafe.', 'custom-post-image-creator' ) ) ); }
+        $staging = trailingslashit( $staging_root );
         if ( ! wp_mkdir_p( $staging ) || ! is_writable( $staging ) ) { wp_send_json_error( array( 'message' => __( 'The temporary upload directory is not writable.', 'custom-post-image-creator' ) ) ); }
         if ( ! file_exists( $staging . 'index.php' ) ) { file_put_contents( $staging . 'index.php', "<?php\nexit;\n", LOCK_EX ); }
         if ( ! file_exists( $staging . '.htaccess' ) ) { file_put_contents( $staging . '.htaccess', "Options -Indexes\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n", LOCK_EX ); }

@@ -14,4 +14,9 @@ for (const statement of statements) {
 }
 assert.strictEqual((installer.match(/dbDelta\(\s*\$sql\s*\);/g) || []).length, 4,
     'each schema definition must be reconciled through dbDelta');
-console.log('PASS: all four installer schemas use WordPress dbDelta-compatible CREATE TABLE syntax.');
+assert(installer.indexOf('if ( ! self::schema_is_ready() )') < installer.indexOf("update_option( 'cpic_db_version', CPIC_VERSION )"),
+    'a failed table creation must not mark the schema version as current');
+assert(installer.includes('|| ! self::schema_is_ready()'), 'an existing install with missing tables/columns must retry schema repair');
+assert(installer.indexOf('! self::import_legacy_queue()') < installer.indexOf("update_option( 'cpic_db_version', CPIC_VERSION )"),
+    'the database version must not advance while legacy queue import is incomplete');
+console.log('PASS: dbDelta-compatible schemas and failed schema/data migrations remain retryable.');

@@ -16,6 +16,7 @@ global $wpdb;
 // generated images unless an administrator explicitly opted into a full purge.
 wp_clear_scheduled_hook( 'cpic_cron_process_queue' );
 wp_clear_scheduled_hook( 'cpic_cron_process_jobs' );
+wp_clear_scheduled_hook( 'cpic_daily_maintenance' );
 if ( ! get_option( 'cpic_delete_data_on_uninstall', 0 ) ) {
     return;
 }
@@ -74,6 +75,13 @@ foreach ( $cpic_options as $option ) {
     delete_option( $option );
 }
 
+// Full purge also removes per-post Telegram delivery locks left by manual/automatic shares.
+$tg_lock_pattern = $wpdb->esc_like( 'cpic_tg_publish_lock_' ) . '%';
+$tg_lock_options = $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s", $tg_lock_pattern ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+foreach ( is_array( $tg_lock_options ) ? $tg_lock_options : array() as $tg_lock_option ) {
+    delete_option( $tg_lock_option );
+}
+
 // Clean up per-post meta.
 delete_post_meta_by_key( 'cpic_last_shared_to_facebook' );
 delete_post_meta_by_key( 'cpic_last_shared_to_telegram' );
@@ -97,6 +105,12 @@ delete_post_meta_by_key( 'cpic_fb_publish_lock' );
 $upload = wp_upload_dir();
 foreach ( array( 'cpic-temp', 'cpic-generated', 'cpic-previews', 'cpic-fontconfig' ) as $cpic_dir ) {
     $path = trailingslashit( $upload['basedir'] ) . $cpic_dir;
+    if ( is_link( $path ) ) {
+        // Remove only the plugin-owned link itself; never recurse into an
+        // administrator- or attacker-supplied external target.
+        wp_delete_file( $path );
+        continue;
+    }
     $root = realpath( $path );
     if ( ! $root || ! is_dir( $root ) ) { continue; }
     $iterator = new RecursiveIteratorIterator(

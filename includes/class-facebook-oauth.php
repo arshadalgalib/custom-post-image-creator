@@ -30,6 +30,10 @@ class CPIC_Facebook_OAuth {
         return 'cpic_fb_oauth_' . md5( $token );
     }
 
+    private static function pages_transient_key( $session ) {
+        return 'cpic_fb_pages_' . hash( 'sha256', (string) $session );
+    }
+
     private static function create_state_token() {
         $token = wp_generate_password( 12, false );
         $nonce = wp_create_nonce( 'cpic_fb_oauth' );
@@ -53,6 +57,7 @@ class CPIC_Facebook_OAuth {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( esc_html__( 'Permission denied.', 'custom-post-image-creator' ) );
         }
+        check_admin_referer( 'cpic_fb_oauth_start' );
 
         $app_id = cpic()->settings->get( 'cpic_fb_app_id' );
         if ( empty( $app_id ) ) {
@@ -223,17 +228,22 @@ if (window.opener) {
                 return;
             }
 
-            $page_id    = isset( $_POST['page_id'] ) ? sanitize_text_field( wp_unslash( $_POST['page_id'] ) ) : '';
-            $page_token = isset( $_POST['page_token'] ) ? sanitize_text_field( wp_unslash( $_POST['page_token'] ) ) : '';
-            $page_name  = isset( $_POST['page_name'] ) ? sanitize_text_field( wp_unslash( $_POST['page_name'] ) ) : '';
-
-            if ( empty( $page_id ) || empty( $page_token ) ) {
-                $this->show( false, 'Missing page selection.' );
+            $page_id = isset( $_POST['page_id'] ) ? sanitize_text_field( wp_unslash( $_POST['page_id'] ) ) : '';
+            $session = isset( $_POST['page_session'] ) ? sanitize_text_field( wp_unslash( $_POST['page_session'] ) ) : '';
+            $selection = $session ? get_transient( self::pages_transient_key( $session ) ) : false;
+            if ( ! $page_id || ! is_array( $selection ) || (int) ( $selection['user_id'] ?? 0 ) !== get_current_user_id() || empty( $selection['pages'][ $page_id ] ) ) {
+                $this->show( false, 'The page selection expired or is invalid. Please connect Facebook again.' );
                 return;
             }
 
-            $this->store_page_credentials( $page_id, $page_name, $page_token );
-            $this->show( true, $page_name );
+            $page = $selection['pages'][ $page_id ];
+            if ( empty( $page['access_token'] ) || empty( $page['name'] ) ) {
+                $this->show( false, 'The selected Facebook Page credentials are unavailable. Please connect again.' );
+                return;
+            }
+            delete_transient( self::pages_transient_key( $session ) );
+            $this->store_page_credentials( $page['id'], $page['name'], $page['access_token'] );
+            $this->show( true, $page['name'] );
         } catch ( \Throwable $e ) {
             $this->show( false, $e->getMessage() );
         }
@@ -313,6 +323,27 @@ if (window.opener) {
     /* --- Render: Page Selection ----------------------------------- */
 
     private function render_page_selection( $pages ) {
+        $stored_pages = array();
+        foreach ( (array) $pages as $page ) {
+            if ( ! is_array( $page ) || empty( $page['id'] ) || empty( $page['name'] ) || empty( $page['access_token'] ) ) {
+                continue;
+            }
+            $page_id = (string) $page['id'];
+            $stored_pages[ $page_id ] = array(
+                'id' => $page_id,
+                'name' => (string) $page['name'],
+                'access_token' => (string) $page['access_token'],
+            );
+        }
+        if ( empty( $stored_pages ) ) {
+            $this->show( false, 'No usable Facebook Pages were returned. Please connect again.' );
+            return;
+        }
+        $session = wp_generate_password( 48, false );
+        set_transient( self::pages_transient_key( $session ), array(
+            'user_id' => get_current_user_id(),
+            'pages' => $stored_pages,
+        ), 10 * MINUTE_IN_SECONDS );
         ob_end_clean();
         ?>
 <!DOCTYPE html>
@@ -344,9 +375,10 @@ body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justif
 <p class="sub">Select which page to connect for auto-publishing.</p>
 <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php?action=cpic_fb_oauth_select' ) ); ?>">
     <?php wp_nonce_field( 'cpic_fb_oauth_select' ); ?>
+    <input type="hidden" name="page_session" id="page-session" value="<?php echo esc_attr( $session ); ?>">
     <ul class="pages">
-    <?php foreach ( $pages as $page ) : ?>
-        <li class="page" data-token="<?php echo esc_attr( $page['access_token'] ); ?>" data-name="<?php echo esc_attr( $page['name'] ); ?>">
+    <?php foreach ( $stored_pages as $page ) : ?>
+        <li class="page" data-page-id="<?php echo esc_attr( $page['id'] ); ?>">
             <input type="radio" name="page_id" value="<?php echo esc_attr( $page['id'] ); ?>" class="page-radio">
             <div>
                 <div class="page-name"><?php echo esc_html( $page['name'] ); ?></div>
@@ -355,8 +387,6 @@ body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justif
         </li>
     <?php endforeach; ?>
     </ul>
-    <input type="hidden" name="page_token" id="sel-token" value="">
-    <input type="hidden" name="page_name" id="sel-name" value="">
     <div class="btn-row">
         <button type="submit" class="btn" id="btn-confirm" disabled>Connect This Page</button>
     </div>
@@ -365,16 +395,12 @@ body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justif
 <script>
 (function(){
     var items = document.querySelectorAll('.page');
-    var ti = document.getElementById('sel-token');
-    var ni = document.getElementById('sel-name');
     var btn = document.getElementById('btn-confirm');
     items.forEach(function(it){
         it.addEventListener('click', function(){
             items.forEach(function(i){ i.classList.remove('sel'); });
             it.classList.add('sel');
             it.querySelector('input[type=radio]').checked = true;
-            ti.value = it.getAttribute('data-token');
-            ni.value = it.getAttribute('data-name');
             btn.disabled = false;
         });
     });

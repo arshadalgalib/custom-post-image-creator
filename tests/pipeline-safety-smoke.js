@@ -5,6 +5,9 @@ const assert = require('assert');
 const fs = require('fs');
 const publisher = fs.readFileSync(require.resolve('../includes/class-publisher.php'), 'utf8');
 const queue = fs.readFileSync(require.resolve('../includes/class-job-queue.php'), 'utf8');
+const artifacts = fs.readFileSync(require.resolve('../includes/class-canvas-artifacts.php'), 'utf8');
+const admin = fs.readFileSync(require.resolve('../includes/class-admin-ui.php'), 'utf8');
+const uninstall = fs.readFileSync(require.resolve('../uninstall.php'), 'utf8');
 
 const stage2 = publisher.indexOf('Stage 2: Consume the current browser-created canonical PNG');
 const stage3 = publisher.indexOf('Stage 3: Publish to Facebook');
@@ -22,4 +25,9 @@ assert(publisher.includes('$has_destination_side_effect'),
 const deleteMethod = queue.slice(queue.indexOf('public function delete_job'), queue.indexOf('public function delete_jobs_for_post'));
 assert(deleteMethod.includes('reference-aware artifact pruner'), 'job deletion must leave canonical artifact reclamation to the safe pruner');
 assert(!deleteMethod.includes('wp_delete_file'), 'deleting a job must not remove a post-referenced canonical PNG');
-console.log('PASS: publishing validates fresh artifacts and job deletion preserves canonical PNGs.');
+assert(artifacts.includes('if ( is_link( $file ) ) { wp_delete_file( $file ); continue; }'),
+    'artifact pruning must unlink symlinks instead of resolving and deleting their targets');
+assert(admin.includes('if ( is_link( $staging_root ) )'), 'chunk uploads must reject a symlinked staging directory');
+assert(uninstall.includes('if ( is_link( $path ) )') && uninstall.indexOf('if ( is_link( $path ) )') < uninstall.indexOf('$root = realpath( $path )'),
+    'full uninstall must not traverse a symlinked plugin uploads directory');
+console.log('PASS: publishing validates fresh artifacts and artifact cleanup preserves canonical and external files.');

@@ -1,5 +1,5 @@
 /**
- * Custom Post Image Creator v6.5.3 – Main JS
+ * Custom Post Image Creator v6.5.4 – Main JS
  *
  * Handles:
  *   - Post loading, filtering, sorting, pagination
@@ -108,8 +108,8 @@
                 '<td>' + escHtml(p.author) + '</td>' +
                 '<td>' + escHtml(p.bangla_date) + '</td>' +
                 '<td>' + img + '</td>' +
-                '<td>' + (p.last_fb || '—') + '</td>' +
-                '<td>' + (p.last_tg || '—') + '</td>' +
+                '<td>' + escHtml(p.last_fb || '—') + '</td>' +
+                '<td>' + escHtml(p.last_tg || '—') + '</td>' +
                 '</tr>'
             );
         });
@@ -383,9 +383,8 @@
             if (secret) credData.cpic_fb_app_secret = secret;
 
             cpicAjax('cpic_save_settings', credData, function () {
-                // Popup goes directly to admin-post.php which renders a JS-redirect page.
-                var url = ajax.replace('admin-ajax.php', 'admin-post.php') + '?action=cpic_fb_oauth_start';
-                var popup = window.open(url, 'cpic_fb_oauth', 'width=700,height=700,scrollbars=yes,resizable=yes');
+                // Use the server-generated, nonce-protected admin-post URL.
+                var popup = window.open(cpicData.oauthStartUrl, 'cpic_fb_oauth', 'width=700,height=700,scrollbars=yes,resizable=yes');
                 if (!popup) { alert('Popup blocked. Please allow popups for this site.'); return; }
                 var pollInterval = setInterval(function () {
                     if (!popup || popup.closed) {

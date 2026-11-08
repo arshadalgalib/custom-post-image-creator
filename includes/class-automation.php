@@ -25,6 +25,7 @@ class CPIC_Automation {
         add_action( 'init', array( $this, 'maybe_schedule_cron' ) );
         add_action( 'init', array( $this, 'maybe_run_cron_now' ), 1 );
         add_action( 'cpic_cron_process_jobs', array( $this, 'process_due_jobs' ) );
+        add_action( 'cpic_daily_maintenance', array( $this, 'daily_maintenance' ) );
         add_action( 'cpic_process_single_job', array( $this, 'process_single_post' ) );
 
         add_filter( 'cron_schedules', array( $this, 'add_cron_interval' ) );
@@ -53,11 +54,19 @@ class CPIC_Automation {
         if ( ! wp_next_scheduled( 'cpic_cron_process_jobs' ) ) {
             wp_schedule_event( time(), 'cpic_every_minute', 'cpic_cron_process_jobs' );
         }
+        if ( ! wp_next_scheduled( 'cpic_daily_maintenance' ) ) {
+            wp_schedule_event( time() + DAY_IN_SECONDS, 'daily', 'cpic_daily_maintenance' );
+        }
+    }
+
+    /** Prune old diagnostic records without blocking a post/editor request. */
+    public function daily_maintenance() {
+        CPIC_Logger::prune( 30 );
+        CPIC_Canvas_Artifacts::run_maintenance();
     }
 
     /**
-     * Backup: process due jobs on every admin page load when wp-cron
-     * is unreliable (shared hosting). Throttled to once per minute.
+     * Ask WP-Cron to run due work after the admin response, throttled once per minute.
      */
     public function maybe_run_cron_now() {
         if ( ! is_admin() ) {
@@ -71,7 +80,9 @@ class CPIC_Automation {
             return;
         }
         update_option( 'cpic_last_cron_run', time(), false );
-        $this->process_due_jobs( 1 );
+        // Never perform a potentially slow social API request while rendering
+        // an admin page. WP-Cron runs the scheduled worker separately.
+        wp_schedule_single_event( time() + 5, 'cpic_cron_process_jobs' );
     }
 
     /**

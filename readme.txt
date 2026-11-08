@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, Bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 6.5.3
+Stable tag: 6.5.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -26,7 +26,7 @@ Bengali shaping uses bundled Unicode fonts and the browser's Canvas text engine.
 
 == Installation ==
 
-1. Upload `custom-post-image-creator-6.5.3.zip` via Plugins > Add New > Upload Plugin and activate.
+1. Upload `custom-post-image-creator-6.5.4.zip` via Plugins > Add New > Upload Plugin and activate.
 2. Configure a template, default template, and optional category mappings.
 3. Connect Facebook and/or configure the Telegram bot and channel.
 4. Enable automatic generation only after testing. Save scheduled posts in the WordPress editor so the browser captures their canonical image.
@@ -38,13 +38,20 @@ Includes SolaimanLipi, Noto Serif Bengali, Noto Sans Bengali, and Hind Siliguri 
 
 == Automation ==
 
-Persistent per-post jobs record each destination independently, use atomic claims, bounded retries, and renderer/input/template hashes. A current browser-captured PNG is required before background publication. Jobs wait briefly for the editor upload and then fail actionably if it does not arrive. Existing jobs, settings, templates, mappings, and images are retained on upgrade; schema changes use repeatable dbDelta reconciliation. Uninstall preserves data by default.
+Persistent per-post jobs record each destination independently, use atomic claims, bounded retries, and renderer/input/template hashes. A current browser-captured PNG is required before background publication. Jobs wait briefly for the editor upload and then fail actionably if it does not arrive. Jobs-page reads do not block on social API calls. Daily WP-Cron maintenance prunes logs older than 30 days and cleans abandoned chunks/old unreferenced generated files. Existing jobs, settings, templates, mappings, and images are retained on upgrade; schema changes use repeatable dbDelta reconciliation. Uninstall preserves data by default.
 
 == Security ==
 
 Artifact endpoints require a WordPress nonce and the current user's edit_post permission. The upload accepts bounded, validated PNG data only and stores it within the plugin-owned uploads subdirectory. Social credentials remain server-side.
 
 == Changelog ==
+
+= 6.5.4 =
+* Fixed grapheme-safe Unicode caption truncation for Bengali and other combining scripts, including hosts without mbstring.
+* Made installer version advancement depend on confirmed table creation, template seeding, and completion of legacy queue import so failed database writes are retried.
+* Added a nonce to Facebook OAuth start, kept Page access tokens in user-bound server transients, and hardened dynamic admin HTML output.
+* Moved queue work out of Jobs-page responses and scheduled daily log/artifact/staging cleanup with symlink-safe file handling.
+* Fixed Telegram duplicate-window checks for WordPress site timezones.
 
 = 6.5.3 =
 * Fixed fresh-install database table creation with syntax supported by WordPress dbDelta on WordPress 5.8+.
@@ -76,5 +83,5 @@ Artifact endpoints require a WordPress nonce and the current user's edit_post pe
 
 == Upgrade Notice ==
 
-= 6.5.3 =
-Existing plugin data is retained. This update fixes dbDelta table creation; open the admin once after upgrading so the schema reconciliation runs. No server-side text shaping packages are required. Save posts in the WordPress editor to capture the browser-rendered PNG needed by automatic publishing.
+= 6.5.4 =
+Existing plugin data is retained. This update hardens Unicode captions, OAuth CSRF checks, publishing latency, and daily cleanup. Open the admin once after upgrading so scheduled maintenance is registered. No server-side text shaping packages are required. Save posts in the WordPress editor to capture the browser-rendered PNG needed by automatic publishing.

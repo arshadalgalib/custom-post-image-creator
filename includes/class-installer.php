@@ -14,8 +14,11 @@ class CPIC_Installer {
 
     /**
      * Run activation / upgrade tasks.
+     *
+     * @return bool True after schema and legacy-data migrations are confirmed complete.
      */
     public static function run() {
+        global $wpdb;
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
         self::create_log_table();
@@ -23,12 +26,42 @@ class CPIC_Installer {
         self::create_category_mappings_table();
         self::create_jobs_table();
 
+        // Do not run migrations or record the new version if a host rejected
+        // any CREATE/ALTER query. The next admin request will retry safely.
+        if ( ! self::schema_is_ready() ) {
+            return false;
+        }
+
         self::ensure_upload_dirs();
         self::migrate_automation_setting();
         self::maybe_migrate();
-        self::import_legacy_queue();
+        $templates_table = $wpdb->prefix . 'cpic_templates';
+        if ( (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$templates_table}" ) < 1 || ! self::import_legacy_queue() ) {
+            return false;
+        }
 
         update_option( 'cpic_db_version', CPIC_VERSION );
+        return true;
+    }
+
+    /** Confirm required schema columns before migrations mark the database current. */
+    private static function schema_is_ready() {
+        global $wpdb;
+        $required = array(
+            'cpic_logs' => array( 'id', 'log_type', 'message', 'context', 'created_at' ),
+            'cpic_templates' => array( 'id', 'name', 'slug', 'config', 'is_default', 'is_active', 'created_at', 'updated_at' ),
+            'cpic_category_mappings' => array( 'id', 'term_id', 'template_id', 'priority', 'created_at' ),
+            'cpic_jobs' => array( 'id', 'post_id', 'job_key', 'template_id', 'status', 'image_path', 'image_url', 'renderer_id', 'input_hash', 'template_hash', 'rendered_at', 'facebook_post_id', 'facebook_comment_id', 'telegram_message_id', 'auto_facebook', 'auto_telegram', 'next_attempt_at', 'attempts', 'max_retries', 'last_error', 'created_at', 'updated_at' ),
+        );
+        foreach ( $required as $suffix => $required_columns ) {
+            $table = $wpdb->prefix . $suffix;
+            // The table names come only from the fixed plugin suffixes above.
+            $columns = $wpdb->get_col( "SHOW COLUMNS FROM {$table}", 0 ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+            if ( ! is_array( $columns ) || array_diff( $required_columns, $columns ) ) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /* ─── Tables ──────────────────────────────────────── */
@@ -173,7 +206,7 @@ class CPIC_Installer {
     /** Import pending option-backed tasks into the durable queue exactly once. */
     private static function import_legacy_queue() {
         if ( get_option( 'cpic_legacy_queue_migrated', false ) ) {
-            return;
+            return true;
         }
         $legacy = get_option( 'cpic_publish_queue', array() );
         $complete = true;
@@ -207,7 +240,9 @@ class CPIC_Installer {
         }
         if ( $complete ) {
             update_option( 'cpic_legacy_queue_migrated', 1, false );
+            return (bool) get_option( 'cpic_legacy_queue_migrated', false );
         }
+        return false;
     }
 
     /** Preserve the old master automation switch when migrating to the new pipeline. */
@@ -398,7 +433,7 @@ class CPIC_Installer {
      */
     public static function maybe_upgrade() {
         $db_version = get_option( 'cpic_db_version', '' );
-        if ( version_compare( $db_version, CPIC_VERSION, '<' ) ) {
+        if ( version_compare( $db_version, CPIC_VERSION, '<' ) || ! self::schema_is_ready() ) {
             self::run();
         }
     }

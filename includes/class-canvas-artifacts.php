@@ -115,6 +115,11 @@ class CPIC_Canvas_Artifacts {
         return array( 'url' => $url, 'path' => $path, 'sha256' => $sha, 'renderer' => self::RENDERER, 'template_hash' => $context['template_hash'], 'input_hash' => $context['input_hash'] );
     }
 
+    /** Run age- and reference-aware generated-file cleanup from the daily cron worker. */
+    public static function run_maintenance() {
+        self::prune_stale_files();
+    }
+
     /** Remove only old files that are no longer referenced by posts or jobs. */
     private static function prune_stale_files() {
         if ( get_transient( 'cpic_canvas_prune_lock' ) ) { return; }
@@ -122,6 +127,13 @@ class CPIC_Canvas_Artifacts {
         $upload = wp_upload_dir();
         $dir = trailingslashit( $upload['basedir'] ) . 'cpic-generated/';
         if ( ! is_dir( $dir ) ) { return; }
+        $staging_root = trailingslashit( $dir ) . '.staging';
+        if ( ! is_link( $staging_root ) && is_dir( $staging_root ) ) {
+            foreach ( (array) glob( trailingslashit( $staging_root ) . 'cpic-u*-p*-*' ) as $part ) {
+                if ( is_link( $part ) ) { wp_delete_file( $part ); }
+                elseif ( is_file( $part ) && filemtime( $part ) < time() - DAY_IN_SECONDS ) { wp_delete_file( $part ); }
+            }
+        }
         global $wpdb;
         $references = $wpdb->get_col( $wpdb->prepare( "SELECT meta_value FROM {$wpdb->postmeta} WHERE meta_key = %s", '_cpic_rendered_image_path' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
         $table = $wpdb->prefix . 'cpic_jobs';
@@ -135,9 +147,13 @@ class CPIC_Canvas_Artifacts {
             $real = realpath( $reference );
             if ( $real ) { $keep[ $real ] = true; }
         }
+        $root = realpath( $dir );
+        $root_prefix = $root ? trailingslashit( $root ) : '';
         foreach ( (array) glob( $dir . 'cpic-*.png' ) as $file ) {
+            // Never follow symlinks outside the generated directory during cleanup.
+            if ( is_link( $file ) ) { wp_delete_file( $file ); continue; }
             $real = realpath( $file );
-            if ( $real && empty( $keep[ $real ] ) && filemtime( $real ) < time() - ( 30 * DAY_IN_SECONDS ) ) { wp_delete_file( $real ); }
+            if ( $real && $root_prefix && 0 === strpos( $real, $root_prefix ) && empty( $keep[ $real ] ) && filemtime( $real ) < time() - ( 30 * DAY_IN_SECONDS ) ) { wp_delete_file( $file ); }
         }
         foreach ( (array) glob( $dir . 'cpic-bulk-*.zip' ) as $archive ) {
             if ( is_file( $archive ) && filemtime( $archive ) < time() - DAY_IN_SECONDS ) { wp_delete_file( $archive ); }

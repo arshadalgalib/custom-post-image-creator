@@ -19,6 +19,10 @@ class CPIC_Facebook_API {
     /** @var string Graph API base */
     const GRAPH_URL = 'https://graph.facebook.com/v22.0/';
 
+    private static function page_selection_key( $key ) {
+        return 'cpic_fb_api_pages_' . hash( 'sha256', (string) $key );
+    }
+
     public function __construct() {
         add_action( 'wp_ajax_cpic_fb_connect',    array( $this, 'ajax_connect' ) );
         add_action( 'wp_ajax_cpic_fb_disconnect',  array( $this, 'ajax_disconnect' ) );
@@ -100,7 +104,31 @@ class CPIC_Facebook_API {
             wp_send_json_error( array( 'message' => $err_msg ) );
         }
 
-        wp_send_json_success( array( 'pages' => $body['data'] ?? array() ) );
+        $stored_pages = array();
+        foreach ( isset( $body['data'] ) && is_array( $body['data'] ) ? $body['data'] : array() as $page ) {
+            if ( ! is_array( $page ) || empty( $page['id'] ) || empty( $page['name'] ) || empty( $page['access_token'] ) ) {
+                continue;
+            }
+            $page_id = (string) $page['id'];
+            $stored_pages[ $page_id ] = array(
+                'id' => $page_id,
+                'name' => (string) $page['name'],
+                'access_token' => (string) $page['access_token'],
+            );
+        }
+        if ( empty( $stored_pages ) ) {
+            wp_send_json_error( array( 'message' => __( 'No usable Facebook Pages were returned.', 'custom-post-image-creator' ) ) );
+        }
+        $selection_key = wp_generate_password( 48, false );
+        set_transient( self::page_selection_key( $selection_key ), array(
+            'user_id' => get_current_user_id(),
+            'pages' => $stored_pages,
+        ), 10 * MINUTE_IN_SECONDS );
+        $public_pages = array();
+        foreach ( $stored_pages as $page ) {
+            $public_pages[] = array( 'id' => $page['id'], 'name' => $page['name'] );
+        }
+        wp_send_json_success( array( 'pages' => $public_pages, 'selection_key' => $selection_key ) );
     }
 
     /* ─── AJAX: select page ───────────────────────────── */
@@ -108,17 +136,21 @@ class CPIC_Facebook_API {
     public function ajax_select_page() {
         cpic()->security->verify_ajax_request();
 
-        $page_id    = sanitize_text_field( wp_unslash( $_POST['page_id'] ?? '' ) );
-        $page_name  = sanitize_text_field( wp_unslash( $_POST['page_name'] ?? '' ) );
-        $page_token = sanitize_text_field( wp_unslash( $_POST['page_token'] ?? '' ) );
-
-        if ( empty( $page_id ) || empty( $page_token ) ) {
-            wp_send_json_error( array( 'message' => __( 'Missing page details.', 'custom-post-image-creator' ) ) );
+        $page_id = sanitize_text_field( wp_unslash( $_POST['page_id'] ?? '' ) );
+        $selection_key = sanitize_text_field( wp_unslash( $_POST['selection_key'] ?? '' ) );
+        $selection = $selection_key ? get_transient( self::page_selection_key( $selection_key ) ) : false;
+        if ( ! $page_id || ! is_array( $selection ) || (int) ( $selection['user_id'] ?? 0 ) !== get_current_user_id() || empty( $selection['pages'][ $page_id ] ) ) {
+            wp_send_json_error( array( 'message' => __( 'The page selection expired or is invalid. Fetch the Page list again.', 'custom-post-image-creator' ) ), 403 );
         }
-
-        cpic()->settings->set( 'cpic_fb_page_id', $page_id );
-        cpic()->settings->set( 'cpic_fb_page_name', $page_name );
-        cpic()->settings->set( 'cpic_fb_page_token', $page_token );
+        $page = $selection['pages'][ $page_id ];
+        if ( empty( $page['name'] ) || empty( $page['access_token'] ) ) {
+            wp_send_json_error( array( 'message' => __( 'The selected Facebook Page credentials are unavailable.', 'custom-post-image-creator' ) ) );
+        }
+        delete_transient( self::page_selection_key( $selection_key ) );
+        cpic()->settings->set( 'cpic_fb_page_id', $page['id'] );
+        cpic()->settings->set( 'cpic_fb_page_name', $page['name'] );
+        cpic()->settings->set( 'cpic_fb_page_token', $page['access_token'] );
+        $page_name = $page['name'];
 
         wp_send_json_success( array(
             'message'   => __( 'Facebook Page connected.', 'custom-post-image-creator' ),
@@ -612,7 +644,7 @@ class CPIC_Facebook_API {
     /** Truncate on grapheme boundaries while respecting a code-point limit. */
     private function utf8_slice( $value, $length ) {
         $length = max( 0, (int) $length );
-        if ( preg_match_all( '/\\X/u', (string) $value, $matches ) ) {
+        if ( preg_match_all( '/\X/u', (string) $value, $matches ) ) {
             $result = '';
             $used = 0;
             foreach ( $matches[0] as $grapheme ) {

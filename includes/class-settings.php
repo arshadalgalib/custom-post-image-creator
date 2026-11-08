@@ -226,7 +226,11 @@ class CPIC_Settings {
 
     public function ajax_get() {
         cpic()->security->verify_ajax_request();
-        wp_send_json_success( $this->get_all() );
+        $settings = $this->get_all();
+        // Secret values are write-only in the browser; a blank field never
+        // needs the stored value to repopulate a settings screen.
+        unset( $settings['cpic_fb_app_secret'], $settings['cpic_fb_page_token'], $settings['cpic_tg_bot_token'] );
+        wp_send_json_success( $settings );
     }
 
     /* ─── AJAX: save backgrounds ──────────────────────────── */
