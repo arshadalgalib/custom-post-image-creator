@@ -8,6 +8,10 @@ tools/harness/node_modules/
 /build/
 *.zip
 
+# Release binaries are committed on purpose so they can be downloaded without
+# a GitHub release asset (uploads.github.com is not always reachable).
+!/releases/*.zip
+
 # Verification harness artifacts
 tools/harness/out/
 
