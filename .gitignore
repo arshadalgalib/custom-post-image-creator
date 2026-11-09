@@ -1,0 +1,11 @@
+node_modules/
+vendor/
+.DS_Store
+*.log
+dist/
+build/
+*.zip
+
+# Verification harness artefacts
+tools/harness/node_modules/
+tests/php/tmp/

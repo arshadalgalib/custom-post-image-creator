@@ -1,141 +1,64 @@
 <?php
 /**
- * Plugin Name: Custom Post Image Creator
- * Plugin URI:  https://developer.wordpress.org/plugins/
- * Description: Fully automatic, category-driven dynamic photocard generation and Facebook publishing. Generates social media photocards (1080×1080) with Bengali typography support, publishes them to Facebook Pages, and posts the article URL as the first comment. Includes template manager, category mapping, persistent job queue, and admin dashboard.
- * Version:     6.1.0
- * Author:      CPIC Dev Team
- * Author URI:  https://developer.wordpress.org/
- * License:     GPL-2.0-or-later
- * License URI: https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain: custom-post-image-creator
- * Domain Path: /languages
+ * Plugin Name:       Custom Post Image Creator
+ * Plugin URI:        https://github.com/arshadalgalib/custom-post-image-creator
+ * Description:       Design studio, multilingual (Bengali-first) social image rendering, brand kits, templates, multi-account Facebook and Telegram publishing, delivery tracking, campaigns, calendar, analytics and automation for WordPress content.
+ * Version:           7.0.0
+ * Author:            CPIC Dev Team
+ * Author URI:        https://github.com/arshadalgalib/custom-post-image-creator
+ * License:           GPL-2.0-or-later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+ * Text Domain:       custom-post-image-creator
+ * Domain Path:       /languages
  * Requires at least: 5.8
- * Requires PHP: 7.4
+ * Requires PHP:      7.4
+ *
+ * @package CustomPostImageCreator
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
-    exit;
+	exit;
 }
 
-/* ─── Constants ─────────────────────────────────────────────── */
-define( 'CPIC_VERSION', '6.3.0' );
+/* ─── Constants ─────────────────────────────────────────────────────── */
+
+if ( ! defined( 'CPIC_VERSION' ) ) {
+	define( 'CPIC_VERSION', '7.0.0' );
+}
+define( 'CPIC_PLUGIN_FILE', __FILE__ );
 define( 'CPIC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'CPIC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'CPIC_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
+define( 'CPIC_DB_VERSION', '7.0.0' );
+define( 'CPIC_REST_NAMESPACE', 'cpic/v1' );
+define( 'CPIC_MIN_PHP', '7.4' );
+define( 'CPIC_MIN_WP', '5.8' );
 
-/* ─── Autoload classes ──────────────────────────────────────── */
-require_once CPIC_PLUGIN_DIR . 'includes/class-security.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-settings.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-bangla-date.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-logger.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-installer.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-template-manager.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-category-mapper.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-job-queue.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-renderer.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-image-generator.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-facebook-api.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-facebook-oauth.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-telegram-api.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-publisher.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-automation.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-auto-publisher.php';
-require_once CPIC_PLUGIN_DIR . 'includes/class-admin-ui.php';
+/* ─── Autoloader (PSR-4 style, no Composer requirement at runtime) ──── */
 
-/* ─── Main bootstrap class ──────────────────────────────────── */
-final class Custom_Post_Image_Creator {
+require_once CPIC_PLUGIN_DIR . 'src/Core/Autoloader.php';
+\CPIC\Core\Autoloader::register();
 
-    /** @var self|null */
-    private static $instance = null;
+/* ─── Boot ──────────────────────────────────────────────────────────── */
 
-    /** Class singletons */
-    public $security;
-    public $settings;
-    public $admin_ui;
-    public $image_generator;
-    public $facebook_api;
-    public $facebook_oauth;
-    public $telegram_api;
-    public $auto_publisher;
-    public $logger;
-    public $renderer;
-    public $template_manager;
-    public $category_mapper;
-    public $queue;
-    public $publisher;
-    public $automation;
-
-    /**
-     * Singleton accessor.
-     */
-    public static function get_instance() {
-        if ( null === self::$instance ) {
-            self::$instance = new self();
-        }
-        return self::$instance;
-    }
-
-    private function __construct() {
-        $this->security        = new CPIC_Security();
-        $this->settings        = new CPIC_Settings();
-        $this->logger          = new CPIC_Logger();
-        $this->renderer        = new CPIC_Renderer();
-        $this->template_manager = new CPIC_Template_Manager();
-        $this->category_mapper = new CPIC_Category_Mapper();
-        $this->queue           = new CPIC_Queue();
-        $this->image_generator = new CPIC_Image_Generator();
-        $this->facebook_api    = new CPIC_Facebook_API();
-        $this->facebook_oauth  = new CPIC_Facebook_OAuth();
-        $this->telegram_api    = new CPIC_Telegram_API();
-        $this->publisher       = new CPIC_Publisher();
-        $this->automation      = new CPIC_Automation();
-        $this->auto_publisher  = new CPIC_Auto_Publisher();
-        $this->admin_ui        = new CPIC_Admin_UI();
-
-        add_action( 'init', array( $this, 'load_textdomain' ) );
-
-        register_activation_hook( __FILE__, array( $this, 'activate' ) );
-        register_deactivation_hook( __FILE__, array( $this, 'deactivate' ) );
-
-        // Upgrade/migration check.
-        add_action( 'admin_init', array( 'CPIC_Installer', 'maybe_upgrade' ) );
-    }
-
-    /**
-     * Load plugin text domain.
-     */
-    public function load_textdomain() {
-        load_plugin_textdomain( 'custom-post-image-creator', false, dirname( CPIC_PLUGIN_BASENAME ) . '/languages' );
-    }
-
-    /**
-     * Activation tasks.
-     */
-    public function activate() {
-        CPIC_Installer::run();
-    }
-
-    /**
-     * Deactivation tasks.
-     */
-    public function deactivate() {
-        wp_clear_scheduled_hook( 'cpic_cron_process_queue' );
-        wp_clear_scheduled_hook( 'cpic_cron_process_jobs' );
-    }
-
-    private function __clone() {}
-    public function __wakeup() {
-        throw new \Exception( 'Cannot unserialize singleton' );
-    }
+/**
+ * Main plugin accessor.
+ *
+ * @return \CPIC\Core\Plugin
+ */
+function cpic() {
+	return \CPIC\Core\Plugin::instance();
 }
 
 /**
- * Returns the main plugin instance.
+ * Service container shortcut.
+ *
+ * @param string|null $id Service id.
+ * @return mixed
  */
-function cpic() {
-    return Custom_Post_Image_Creator::get_instance();
+function cpic_service( $id = null ) {
+	return null === $id ? cpic()->container() : cpic()->container()->get( $id );
 }
 
-// Boot.
+// Boot as early as possible; modules decide their own hook timing.
 cpic();
