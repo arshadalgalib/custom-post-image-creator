@@ -590,6 +590,22 @@ $GLOBALS['cpic_test_fail_rewrite_flush'] = false;
 $plugin->on_activate();
 CPIC_Test::ok( false === get_option( 'cpic_activation_errors' ), 'A clean activation clears the errors' );
 
+// Ordering guarantee: the lifecycle hooks must be registered before any module
+// boots. WordPress includes this plugin after `plugins_loaded` has already
+// fired, so a module that throws during boot would otherwise take the
+// activation hook down with it - which is exactly the reported failure.
+$boot_source = (string) file_get_contents( CPIC_PLUGIN_DIR . 'src/Core/Plugin.php' );
+$hook_at     = strpos( $boot_source, 'register_activation_hook' );
+$modules_at  = strpos( $boot_source, '$this->modules->boot()' );
+
+CPIC_Test::ok( false !== $hook_at && false !== $modules_at && $hook_at < $modules_at, 'Activation hook is registered before modules boot' );
+CPIC_Test::ok( false !== strpos( $boot_source, 'catch ( \\Throwable $e )' ), 'Module boot is wrapped in a guard' );
+
+// The loaded plugin must report its own load health.
+CPIC_Test::ok( method_exists( $plugin, 'load_failures' ), 'load_failures() exists for diagnostics' );
+CPIC_Test::ok( method_exists( $plugin, 'booted_cleanly' ), 'booted_cleanly() exists for diagnostics' );
+CPIC_Test::equal( array(), (array) $plugin->modules()->failures(), 'No module failed to load in this environment' );
+
 /* ═══ 13. Render signature / caching ════════════════════════════ */
 
 CPIC_Test::suite( 'Rendering: cache signatures' );

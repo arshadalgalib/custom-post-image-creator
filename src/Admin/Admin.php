@@ -255,8 +255,14 @@ final class Admin {
 	 */
 	public function notices() {
 		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+		$id     = $screen ? (string) $screen->id : '';
 
-		if ( ! $screen || false === strpos( (string) $screen->id, 'cpic-' ) ) {
+		// The failure notice follows the user: plugin screens, and the Plugins
+		// list where they land right after an activation attempt fails.
+		$is_plugin_screen = ( false !== strpos( $id, 'cpic-' ) );
+		$is_plugins_list  = ( 'plugins' === $id || 'plugins-network' === $id );
+
+		if ( ! $is_plugin_screen && ! $is_plugins_list ) {
 			return;
 		}
 
@@ -265,6 +271,10 @@ final class Admin {
 		}
 
 		$this->activation_notice();
+
+		if ( ! $is_plugin_screen ) {
+			return;
+		}
 
 		$report = $this->container->get( 'health' )->summary();
 
@@ -356,9 +366,29 @@ final class Admin {
 	private function activation_notice() {
 		$report = get_option( 'cpic_activation_errors' );
 
-		if ( ! is_array( $report ) || empty( $report['errors'] ) ) {
+		// Stored activation failures (a step or module failed earlier) ...
+		$errors = is_array( $report ) && ! empty( $report['errors'] ) ? (array) $report['errors'] : array();
+
+		// ... plus anything that failed while loading on this very request, so a
+		// module that breaks only on some hosts is still visible.
+		$plugin = \CPIC\Core\Plugin::instance();
+
+		if ( method_exists( $plugin, 'load_failures' ) ) {
+			foreach ( $plugin->load_failures() as $id => $failure ) {
+				if ( ! isset( $errors[ $id ] ) ) {
+					$errors[ $id ] = $failure;
+				}
+			}
+		}
+
+		if ( empty( $errors ) ) {
 			return;
 		}
+
+		$report = array_merge(
+			is_array( $report ) ? $report : array(),
+			array( 'errors' => $errors )
+		);
 
 		echo '<div class="notice notice-error"><p><strong>';
 		esc_html_e( 'Post Image Creator could not finish setting up.', 'custom-post-image-creator' );

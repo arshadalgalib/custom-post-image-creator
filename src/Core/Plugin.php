@@ -48,6 +48,13 @@ final class Plugin {
 	private $booted = false;
 
 	/**
+	 * Message from a failed module boot, if any.
+	 *
+	 * @var string
+	 */
+	private $boot_error = '';
+
+	/**
 	 * Retrieve the singleton.
 	 *
 	 * @return Plugin
@@ -127,6 +134,23 @@ final class Plugin {
 	/**
 	 * Boot modules once.
 	 *
+	 * Order matters. The activation/deactivation hooks are registered *first*,
+	 * and the modules boot afterwards inside a guard.
+	 *
+	 * This file is included at a point where WordPress has already fired
+	 * `plugins_loaded` (most importantly during activation, where
+	 * `activate_plugin()` includes the plugin from inside an admin request).
+	 * Anything a module does at that moment - reading an option, touching a
+	 * table, resolving a user, calling a function added by another plugin that
+	 * has not loaded yet - can throw. If that happened before the hooks were
+	 * registered, or escaped at all, WordPress would keep running with this
+	 * plugin's activation hook missing and report "could not be activated
+	 * because it triggered a fatal error".
+	 *
+	 * So: register the lifecycle hooks, then let modules attach their own hooks
+	 * defensively. `ModuleManager` already isolates each provider; this outer
+	 * guard covers the manager itself.
+	 *
 	 * @return void
 	 */
 	public function boot() {
@@ -138,7 +162,43 @@ final class Plugin {
 		register_activation_hook( CPIC_PLUGIN_FILE, array( $this, 'on_activate' ) );
 		register_deactivation_hook( CPIC_PLUGIN_FILE, array( $this, 'on_deactivate' ) );
 
-		$this->modules->boot();
+		try {
+			$this->modules->boot();
+		} catch ( \Throwable $e ) {
+			$this->boot_error = $e->getMessage() . ' (' . basename( $e->getFile() ) . ':' . $e->getLine() . ')';
+
+			if ( function_exists( 'error_log' ) ) { // phpcs:ignore WordPress.PHP.DevelopmentFunctions
+				error_log( 'CPIC: module boot failed: ' . $this->boot_error ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions
+			}
+		}
+	}
+
+	/**
+	 * Whether the plugin booted fully, for the diagnostics screen.
+	 *
+	 * @return bool
+	 */
+	public function booted_cleanly() {
+		return empty( $this->boot_error ) && empty( $this->modules->failures() );
+	}
+
+	/**
+	 * Everything that went wrong while loading, keyed by module id.
+	 *
+	 * @return array<string,array<string,string>|string>
+	 */
+	public function load_failures() {
+		$failures = $this->load_failures();
+
+		if ( ! empty( $this->boot_error ) ) {
+			$failures['bootstrap'] = array(
+				'phase'   => 'boot',
+				'message' => $this->boot_error,
+				'file'    => '',
+			);
+		}
+
+		return $failures;
 	}
 
 	/**

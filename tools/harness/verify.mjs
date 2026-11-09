@@ -15,6 +15,7 @@ const repo = resolve(here, '../..');
 const steps = [
 	['PHP lint', [process.execPath, 'php-lint.mjs', repo]],
 	['PHP 7.4 compatibility', [process.execPath, 'smoke.mjs', 'tools/harness/php-compat.php']],
+	
 	['Class + service integrity', [process.execPath, 'smoke.mjs', 'tools/harness/class-integrity.php']],
 	['Activation simulation', [process.execPath, 'smoke.mjs', 'tools/harness/activation-smoke.php']],
 	['PHP test suite', [process.execPath, 'run-php-tests.mjs', repo]],

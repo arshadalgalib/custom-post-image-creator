@@ -49,6 +49,7 @@ export function pluginFiles(repoRoot) {
 		...walk(join(repoRoot, 'tests'), (name) => name.endsWith('.php')),
 		...walk(join(repoRoot, 'templates'), (name) => name.endsWith('.php')),
 		...walk(join(repoRoot, 'tools', 'harness'), (name) => name.endsWith('.php')),
+		...walk(join(repoRoot, 'releases'), (name) => name.endsWith('.php')),
 		join(repoRoot, 'custom-post-image-creator.php'),
 		join(repoRoot, 'uninstall.php'),
 	];

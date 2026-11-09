@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 7.0.2
+Stable tag: 7.0.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,12 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 
 == Changelog ==
 
+= 7.0.3 =
+* Fixed (root cause): the activation hook is now registered *before* any module boots. WordPress includes a plugin from inside an admin request, after `plugins_loaded` has already fired, so anything a module did at that moment could throw and take the activation hook down with it. That is the exact mechanism behind "could not be activated because it triggered a fatal error".
+* Added: if a module still fails to load, the failure is captured by module id and the plugin continues. `load_failures()` and `booted_cleanly()` report the state.
+* Added: the failure notice now also appears on the Plugins list (where you land after a failed activation) and shows failures from the current request, not just stored ones.
+* Added: `cpic-check.php`, a standalone diagnostic. Upload it to your WordPress root and open it in a browser: it reports the PHP version, missing files, any fatal with file and line, broken modules, failed services, database connectivity and required extensions - without needing the plugin to be active.
+
 = 7.0.2 =
 * Fixed: a module (service provider) that throws while booting no longer kills the request. Providers boot at file-include time, after the activation hook is registered, so an escaped exception was reported as "could not be activated because it triggered a fatal error" with no explanation. Each provider is now isolated, the failure is recorded by module id, and the rest of the plugin keeps working.
 * Fixed: the plugin bootstrap itself is wrapped, so any boot-time failure is logged and stored for the admin notice instead of producing a white screen. `cpic()` and `cpic_service()` are guarded, and requiring the entry file more than once is safe.
@@ -129,6 +135,9 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 See the previous readme for the 5.x/6.x history. Legacy classes (`CPIC_Template_Manager`, `CPIC_Image_Generator`, `CPIC_Facebook_Poster`, `CPIC_Telegram_Poster`, `CPIC_Settings`) remain loadable through compatibility adapters, and existing settings and credentials are imported once on upgrade.
 
 == Upgrade Notice ==
+
+= 7.0.3 =
+Fixes the root cause of the activation fatal error: the activation hook is registered before modules load, and any module failure is captured instead of killing the request. Includes `cpic-check.php` for diagnosing stubborn installs.
 
 = 7.0.2 =
 Activation hardening: a single failing module can no longer abort activation, and any cause is reported on every plugin screen. Install over 7.0.x; no data changes are needed.
