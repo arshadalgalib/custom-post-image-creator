@@ -365,6 +365,18 @@ final class Admin {
 		echo '</strong></p><ul class="cpic-notice-list">';
 
 		foreach ( (array) $report['errors'] as $step => $message ) {
+			// Module failures arrive as arrays; activation steps as strings.
+			if ( is_array( $message ) ) {
+				$message = sprintf(
+					/* translators: 1: phase, 2: message, 3: file:line */
+					__( '%1$s failed during %2$s (%3$s)', 'custom-post-image-creator' ),
+					(string) $step,
+					isset( $message['phase'] ) ? (string) $message['phase'] : 'boot',
+					( isset( $message['message'] ) ? (string) $message['message'] : '' ) . ' ' . ( isset( $message['file'] ) ? (string) $message['file'] : '' )
+				);
+				$step = 'module';
+			}
+
 			echo '<li><code>' . esc_html( (string) $step ) . '</code>: ' . esc_html( (string) $message ) . '</li>';
 		}
 

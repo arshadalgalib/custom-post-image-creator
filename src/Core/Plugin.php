@@ -153,7 +153,9 @@ final class Plugin {
 	 * @return void
 	 */
 	public function on_activate() {
-		$failures = array();
+		// A module that failed to load means its services are missing; recording
+		// that here turns a mysterious fatal into a named cause.
+		$failures = $this->modules->failures();
 
 		$steps = array(
 			'database'     => static function ( Plugin $plugin ) {

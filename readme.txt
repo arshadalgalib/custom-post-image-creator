@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 7.0.1
+Stable tag: 7.0.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,13 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 
 == Changelog ==
 
+= 7.0.2 =
+* Fixed: a module (service provider) that throws while booting no longer kills the request. Providers boot at file-include time, after the activation hook is registered, so an escaped exception was reported as "could not be activated because it triggered a fatal error" with no explanation. Each provider is now isolated, the failure is recorded by module id, and the rest of the plugin keeps working.
+* Fixed: the plugin bootstrap itself is wrapped, so any boot-time failure is logged and stored for the admin notice instead of producing a white screen. `cpic()` and `cpic_service()` are guarded, and requiring the entry file more than once is safe.
+* Added: `cpic_activation_errors` is now shown on every plugin screen, naming the module or step, the message, the file and line, and the PHP version.
+* Added: `tools/harness/php-compat.php` scans for syntax and functions newer than the declared PHP 7.4 floor (this sandbox only has 8.0-8.4, so the ordinary lint cannot see them).
+* Added: activation is verified on PHP 8.0, 8.1, 8.2, 8.3 and 8.4 via `CPIC_PHP_VERSION`, and against a hostile host where a module throws.
+
 = 7.0.1 =
 * Fixed: activating the plugin could trigger a fatal error. `PublishResult` lived in `src/Publishing/Providers/` while declaring `namespace CPIC\Publishing`, so the autoloader could never find it; it now lives in `src/Publishing/`.
 * Fixed: the five 6.x compatibility shims (`CPIC_Template_Manager`, `CPIC_Image_Generator`, `CPIC_Facebook_Poster`, `CPIC_Telegram_Poster`, `CPIC_Settings`) were declared in one `Adapters.php` file, so none of them could be autoloaded. Each is now its own file with a shared `bootstrap.php`.
@@ -123,8 +130,11 @@ See the previous readme for the 5.x/6.x history. Legacy classes (`CPIC_Template_
 
 == Upgrade Notice ==
 
+= 7.0.2 =
+Activation hardening: a single failing module can no longer abort activation, and any cause is reported on every plugin screen. Install over 7.0.x; no data changes are needed.
+
 = 7.0.1 =
-Fixes the activation fatal error. If 7.0.0 refused to activate, install 7.0.1 over it; no data changes are needed.
+Fixes an autoloading fatal error. If 7.0.0 refused to activate, install 7.0.1 or later over it; no data changes are needed.
 
 = 7.0.0 =
 Major release with a new database schema and a new studio. Your existing templates, settings and single-account Facebook/Telegram credentials are imported automatically on the first admin page load. Automatic publishing stays off until you enable it.

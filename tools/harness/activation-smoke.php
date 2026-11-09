@@ -240,6 +240,114 @@ try {
 	cpic_smoke_fail( 'Recovery activation threw: ' . $cpic_error->getMessage() );
 }
 
+// A module that explodes while booting must not kill the request. Modules boot
+// at file-include time, after the activation hook is registered, so an escaped
+// exception is exactly what WordPress reports as "could not be activated".
+echo "\n== Activation: module isolation ==\n";
+
+$cpic_modules = new \CPIC\Core\ModuleManager( $plugin->container() );
+
+$cpic_modules->add(
+	new class() extends \CPIC\Core\ServiceProvider {
+		/**
+		 * Id.
+		 *
+		 * @return string
+		 */
+		public function id() {
+			return 'exploding';
+		}
+
+		/**
+		 * Boot and throw.
+		 *
+		 * @param \CPIC\Core\Container $container Container.
+		 * @return void
+		 */
+		public function boot( \CPIC\Core\Container $container ) {
+			throw new \RuntimeException( 'simulated module failure' );
+		}
+	}
+);
+
+$cpic_modules->add(
+	new class() extends \CPIC\Core\ServiceProvider {
+		/**
+		 * Id.
+		 *
+		 * @return string
+		 */
+		public function id() {
+			return 'healthy';
+		}
+	}
+);
+
+try {
+	$cpic_modules->boot();
+	cpic_smoke_pass( 'A throwing module does not stop the others booting' );
+} catch ( \Throwable $cpic_error ) {
+	cpic_smoke_fail( 'A throwing module killed boot(): ' . $cpic_error->getMessage() );
+}
+
+$cpic_module_failures = $cpic_modules->failures();
+
+if ( isset( $cpic_module_failures['exploding'] ) ) {
+	cpic_smoke_pass( 'The failing module is recorded by id' );
+} else {
+	cpic_smoke_fail( 'The failing module was not recorded' );
+}
+
+if ( ! isset( $cpic_module_failures['healthy'] ) ) {
+	cpic_smoke_pass( 'The healthy module is not blamed' );
+} else {
+	cpic_smoke_fail( 'The healthy module was recorded as failed' );
+}
+
+// End to end: a module that throws while booting must leave a working plugin.
+echo "\n== Activation: hostile host (real boot path) ==\n";
+
+$cpic_session_ok = true;
+
+add_action(
+	'cpic/test/boot/automation',
+	static function () {
+		throw new \RuntimeException( 'simulated automation boot failure' );
+	}
+);
+
+try {
+	// Rebuild the plugin through the real bootstrap with a module that throws.
+	$reflection = new \ReflectionClass( \CPIC\Core\Plugin::class );
+	$property   = $reflection->getProperty( 'instance' );
+	$property->setAccessible( true );
+	$property->setValue( null, null );
+
+	require CPIC_ENTRY_FILE;
+
+	$cpic_plugins = \CPIC\Core\Plugin::instance();
+	$cpic_failed  = $cpic_plugins->modules()->failures();
+
+	if ( isset( $cpic_failed['automation'] ) ) {
+		cpic_smoke_pass( 'A module that throws during boot is recorded' );
+	} else {
+		cpic_smoke_fail( 'A module that throws during boot was not recorded' );
+	}
+
+	foreach ( array( 'settings', 'templates', 'render', 'queue' ) as $cpic_service ) {
+		if ( null === $cpic_plugins->service( $cpic_service ) ) {
+			cpic_smoke_fail( 'Service "' . $cpic_service . '" is unavailable after a module failure' );
+			$cpic_session_ok = false;
+		}
+	}
+
+	if ( $cpic_session_ok ) {
+		cpic_smoke_pass( 'The rest of the plugin still works (settings, templates, render, queue)' );
+	}
+} catch ( \Throwable $cpic_error ) {
+	cpic_smoke_fail( 'A module failure still fatals the plugin: ' . $cpic_error->getMessage() );
+}
+
 echo "\n";
 
 if ( empty( $cpic_problems ) ) {

@@ -3,7 +3,7 @@
  * Plugin Name:       Custom Post Image Creator
  * Plugin URI:        https://github.com/arshadalgalib/custom-post-image-creator
  * Description:       Design studio, multilingual (Bengali-first) social image rendering, brand kits, templates, multi-account Facebook and Telegram publishing, delivery tracking, campaigns, calendar, analytics and automation for WordPress content.
- * Version:           7.0.1
+ * Version:           7.0.2
  * Author:            CPIC Dev Team
  * Author URI:        https://github.com/arshadalgalib/custom-post-image-creator
  * License:           GPL-2.0-or-later
@@ -29,7 +29,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * paths are the ones that should win.
  */
 if ( ! defined( 'CPIC_VERSION' ) ) {
-	define( 'CPIC_VERSION', '7.0.1' );
+	define( 'CPIC_VERSION', '7.0.2' );
 }
 if ( ! defined( 'CPIC_PLUGIN_FILE' ) ) {
 	define( 'CPIC_PLUGIN_FILE', __FILE__ );
@@ -44,7 +44,7 @@ if ( ! defined( 'CPIC_PLUGIN_BASENAME' ) ) {
 	define( 'CPIC_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 }
 if ( ! defined( 'CPIC_DB_VERSION' ) ) {
-	define( 'CPIC_DB_VERSION', '7.0.1' );
+	define( 'CPIC_DB_VERSION', '7.0.2' );
 }
 if ( ! defined( 'CPIC_REST_NAMESPACE' ) ) {
 	define( 'CPIC_REST_NAMESPACE', 'cpic/v1' );
@@ -63,24 +63,56 @@ require_once CPIC_PLUGIN_DIR . 'src/Core/Autoloader.php';
 
 /* ─── Boot ──────────────────────────────────────────────────────────── */
 
-/**
- * Main plugin accessor.
- *
- * @return \CPIC\Core\Plugin
- */
-function cpic() {
-	return \CPIC\Core\Plugin::instance();
+if ( ! function_exists( 'cpic' ) ) {
+	/**
+	 * Main plugin accessor.
+	 *
+	 * @return \CPIC\Core\Plugin
+	 */
+	function cpic() {
+		return \CPIC\Core\Plugin::instance();
+	}
 }
 
-/**
- * Service container shortcut.
- *
- * @param string|null $id Service id.
- * @return mixed
- */
-function cpic_service( $id = null ) {
-	return null === $id ? cpic()->container() : cpic()->container()->get( $id );
+if ( ! function_exists( 'cpic_service' ) ) {
+	/**
+	 * Service container shortcut.
+	 *
+	 * @param string|null $id Service id.
+	 * @return mixed
+	 */
+	function cpic_service( $id = null ) {
+		return null === $id ? cpic()->container() : cpic()->container()->get( $id );
+	}
 }
 
-// Boot as early as possible; modules decide their own hook timing.
-cpic();
+/*
+ * Boot as early as possible; modules decide their own hook timing.
+ *
+ * `Plugin` runs its constructor and every module's `boot()` here, at
+ * file-include time. If that ever throws, WordPress is mid-activation and
+ * reports only "could not be activated because it triggered a fatal error".
+ * Catch it, log it, and leave a readable trace for the admin notice instead of
+ * dying silently. Individual modules are already isolated inside
+ * `ModuleManager`; this is the last-resort net around everything else.
+ */
+try {
+	cpic();
+} catch ( \Throwable $cpic_boot_error ) {
+	update_option(
+		'cpic_activation_errors',
+		array(
+			'time'   => time(),
+			'php'    => PHP_VERSION,
+			'errors' => array(
+				'boot' => $cpic_boot_error->getMessage()
+					. ' (' . basename( $cpic_boot_error->getFile() ) . ':' . $cpic_boot_error->getLine() . ')',
+			),
+		),
+		false
+	);
+
+	if ( function_exists( 'error_log' ) ) { // phpcs:ignore WordPress.PHP.DevelopmentFunctions
+		error_log( 'CPIC boot failed: ' . $cpic_boot_error->getMessage() ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions
+	}
+}

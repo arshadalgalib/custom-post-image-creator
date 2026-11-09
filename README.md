@@ -1,4 +1,4 @@
-# Custom Post Image Creator — 7.0.1
+# Custom Post Image Creator — 7.0.2
 
 Design social images for WordPress posts with correct Bengali typography, then publish them to Facebook Pages and Telegram channels with per-channel delivery tracking.
 
@@ -78,6 +78,7 @@ node verify.mjs
 
 # ...or one gate at a time:
 node php-lint.mjs ../../                          # syntax gate
+node smoke.mjs tools/harness/php-compat.php       # nothing newer than PHP 7.4
 node smoke.mjs tools/harness/class-integrity.php  # every class autoloads, every service resolves
 node smoke.mjs tools/harness/activation-smoke.php # fires the real activation hook from the entry file
 node run-php-tests.mjs ../../                     # 312 assertions against SQLite

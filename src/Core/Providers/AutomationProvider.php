@@ -37,6 +37,9 @@ final class AutomationProvider extends ServiceProvider {
 	 * @return void
 	 */
 	public function boot( Container $c ) {
+		// Test hook: the harness simulates a host where one module explodes.
+		do_action( 'cpic/test/boot/automation', $c );
+
 		$c->get( 'scheduler' )->register_handlers();
 
 		// Schedule on any admin request if a previous install lost its events.
