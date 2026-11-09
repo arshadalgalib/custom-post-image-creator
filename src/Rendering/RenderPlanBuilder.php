@@ -233,7 +233,10 @@ final class RenderPlanBuilder {
 					'fallback'      => isset( $element['fallback'] ) ? (string) $element['fallback'] : 'hide',
 					'natural_ratio' => ! empty( $element['natural_ratio'] ),
 				);
-				if ( '' === $layer['image']['url'] && 'gradient' !== $layer['image']['fallback'] ) {
+				// With no image (e.g. a post without a featured image) the plan
+				// keeps the layer and declares how it should be drawn instead.
+				// Hiding it would leave a design with a silent hole in it.
+				if ( '' === $layer['image']['url'] && ! in_array( $layer['image']['fallback'], array( 'gradient', 'blur' ), true ) ) {
 					return null;
 				}
 				break;

@@ -1,0 +1,280 @@
+/**
+ * Design studio canvas, layer list and inspector.
+ *
+ * The canvas paints the render plan; nothing here may change the geometry the
+ * plan describes, so the canvas is always scaled with a single transform.
+ */
+
+.cpic-studio {
+	--cpic-inspector-width: 300px;
+	--cpic-layers-width: 220px;
+}
+
+.cpic-studio__toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 12px;
+	background: #fff;
+	border: 1px solid var(--cpic-border);
+	border-radius: var(--cpic-radius);
+	margin-bottom: var(--cpic-gap);
+}
+
+.cpic-studio__formats {
+	display: inline-flex;
+	gap: 4px;
+	flex-wrap: wrap;
+}
+
+.cpic-studio__formats .button[aria-pressed="true"] {
+	background: #2271b1;
+	border-color: #2271b1;
+	color: #fff;
+}
+
+.cpic-studio__actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-left: auto;
+}
+
+.cpic-studio__status {
+	font-size: 13px;
+	color: var(--cpic-muted);
+	min-width: 8ch;
+}
+
+.cpic-studio__status.is-error {
+	color: var(--cpic-danger);
+}
+
+.cpic-studio__status.is-busy {
+	color: #7a5c00;
+}
+
+.cpic-studio__body {
+	display: grid;
+	grid-template-columns: var(--cpic-layers-width) minmax(0, 1fr) var(--cpic-inspector-width);
+	gap: var(--cpic-gap);
+	align-items: start;
+}
+
+.cpic-studio__layers,
+.cpic-studio__inspector {
+	background: #fff;
+	border: 1px solid var(--cpic-border);
+	border-radius: var(--cpic-radius);
+	padding: 12px 14px;
+	max-height: 78vh;
+	overflow-y: auto;
+}
+
+.cpic-studio__layers h2,
+.cpic-studio__inspector h2 {
+	margin: 0 0 10px;
+	font-size: 13px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--cpic-muted);
+}
+
+.cpic-layer-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.cpic-layer {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
+	border-radius: 5px;
+	cursor: pointer;
+	font-size: 13px;
+	line-height: 1.3;
+}
+
+.cpic-layer:hover {
+	background: #f6f7f7;
+}
+
+.cpic-layer.is-selected {
+	background: #f0f6fc;
+	box-shadow: inset 0 0 0 1px #2271b1;
+}
+
+.cpic-layer.is-hidden {
+	opacity: 0.5;
+}
+
+.cpic-layer__type {
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--cpic-muted);
+	min-width: 4.5em;
+}
+
+.cpic-layer__name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.cpic-layer__toggle {
+	border: 0;
+	background: none;
+	padding: 2px 4px;
+	cursor: pointer;
+	color: var(--cpic-muted);
+}
+
+.cpic-layer__toggle:focus-visible,
+.cpic-layer:focus-visible {
+	outline: 2px solid #2271b1;
+	outline-offset: 1px;
+}
+
+/* ── Stage ──────────────────────────────────────────────────────── */
+
+.cpic-studio__stage {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.cpic-canvas-frame {
+	position: relative;
+	width: 100%;
+	display: grid;
+	place-items: center;
+	background: repeating-conic-gradient(#f6f7f7 0% 25%, #fff 0% 50%) 50% / 18px 18px;
+	border: 1px solid var(--cpic-border);
+	border-radius: var(--cpic-radius);
+	padding: 16px;
+	min-height: 320px;
+}
+
+#cpic-canvas {
+	display: block;
+	max-width: 100%;
+	height: auto;
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+	cursor: grab;
+	touch-action: none;
+}
+
+#cpic-canvas:active {
+	cursor: grabbing;
+}
+
+.cpic-canvas-frame__loading {
+	position: absolute;
+	inset: auto 50% 16px auto;
+	transform: translateX(50%);
+	background: rgba(29, 35, 39, 0.85);
+	color: #fff;
+	font-size: 12px;
+	padding: 4px 12px;
+	border-radius: 999px;
+}
+
+.cpic-studio__canvas-meta {
+	margin: 0;
+	font-size: 12px;
+}
+
+/* ── Inspector ──────────────────────────────────────────────────── */
+
+.cpic-studio__inspector .cpic-field {
+	gap: 2px;
+	margin-bottom: 10px;
+}
+
+.cpic-studio__inspector .cpic-field > label {
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.cpic-studio__inspector input[type="text"],
+.cpic-studio__inspector input[type="number"],
+.cpic-studio__inspector input[type="url"],
+.cpic-studio__inspector select,
+.cpic-studio__inspector textarea {
+	width: 100%;
+	max-width: none;
+}
+
+.cpic-studio__inspector .cpic-field--pair {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+}
+
+.cpic-inspector__empty {
+	color: var(--cpic-muted);
+	font-size: 13px;
+}
+
+.cpic-inspector__section {
+	border-top: 1px solid #f0f0f1;
+	padding-top: 10px;
+	margin-top: 10px;
+}
+
+.cpic-inspector__section:first-of-type {
+	border-top: 0;
+	padding-top: 0;
+	margin-top: 0;
+}
+
+.cpic-inspector__section > h3 {
+	margin: 0 0 8px;
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--cpic-muted);
+}
+
+/* ── Result ─────────────────────────────────────────────────────── */
+
+.cpic-studio__result img {
+	max-width: 100%;
+	height: auto;
+	border: 1px solid var(--cpic-border);
+	border-radius: var(--cpic-radius);
+}
+
+.cpic-studio__result .cpic-form__actions {
+	margin-top: 12px;
+}
+
+@media screen and (max-width: 1200px) {
+	.cpic-studio__body {
+		grid-template-columns: var(--cpic-layers-width) minmax(0, 1fr);
+	}
+
+	.cpic-studio__inspector {
+		grid-column: 1 / -1;
+		max-height: none;
+	}
+}
+
+@media screen and (max-width: 782px) {
+	.cpic-studio__body {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.cpic-studio__actions {
+		margin-left: 0;
+		width: 100%;
+	}
+}

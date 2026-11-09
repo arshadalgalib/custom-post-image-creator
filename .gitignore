@@ -6,6 +6,6 @@ dist/
 build/
 *.zip
 
-# Verification harness artefacts
+# Verification harness
 tools/harness/node_modules/
-tests/php/tmp/
+tools/harness/out/

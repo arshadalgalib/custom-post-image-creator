@@ -445,6 +445,23 @@ final class TemplateManager {
 	}
 
 	/**
+	 * The document a post would use when no template exists: a blank design so
+	 * clients always receive something valid and renderable.
+	 *
+	 * @param string $format Format key.
+	 * @return array<string,mixed>
+	 */
+	public function default_document( $format = 'square' ) {
+		$template = $this->default_template();
+
+		if ( $template && ! empty( $template['document'] ) ) {
+			return $template['document'];
+		}
+
+		return $this->schema()->blank( $format );
+	}
+
+	/**
 	 * Resolve the template for a post: category routing first, then default.
 	 *
 	 * @param int $post_id Post id.

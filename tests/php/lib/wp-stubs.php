@@ -2248,3 +2248,15 @@ function paginate_links( $args = array() ) {
 
 	return implode( ' ', $out );
 }
+
+/**
+ * Fetch posts (thin wrapper over the WP_Query stub).
+ *
+ * @param array $args Query args.
+ * @return array<int,WP_Post>
+ */
+function get_posts( $args = array() ) {
+	$query = new WP_Query( $args );
+
+	return $query->posts;
+}

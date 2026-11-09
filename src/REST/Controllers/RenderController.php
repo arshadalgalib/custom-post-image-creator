@@ -53,6 +53,11 @@ final class RenderController extends BaseController {
 		);
 
 		$this->add(
+			'/post/(?P<post_id>\d+)/latest',
+			array( 'GET' => array( 'callback' => array( $this, 'latest' ) ) )
+		);
+
+		$this->add(
 			'/status',
 			array( 'GET' => array( 'callback' => array( $this, 'status' ) ) )
 		);
@@ -86,7 +91,25 @@ final class RenderController extends BaseController {
 
 		$plan = $this->container->get( 'render_plan' )->build( $args );
 
-		return $this->maybe( $plan );
+		if ( is_wp_error( $plan ) ) {
+			return $this->fail( $plan );
+		}
+
+		// The studio and the editor re-save what they render, so the sanitised
+		// document travels with the plan (it is already the validated copy).
+		if ( ! isset( $args['document'] ) ) {
+			$template = $this->param_int( $request, 'template_id' ) > 0
+				? $this->container->get( 'template_manager' )->get( $this->param_int( $request, 'template_id' ) )
+				: $this->container->get( 'template_manager' )->for_post( (int) $args['post_id'] );
+
+			$args['document'] = $template && isset( $template['document'] )
+				? $template['document']
+				: $this->container->get( 'template_manager' )->default_document();
+		}
+
+		$plan['document'] = $args['document'];
+
+		return $this->ok( $plan );
 	}
 
 	/**
@@ -140,6 +163,22 @@ final class RenderController extends BaseController {
 		);
 
 		return $this->maybe( $result );
+	}
+
+	/**
+	 * The most recent artifact for a post (used by the editor panel).
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 */
+	public function latest( $request ) {
+		$artifact = $this->container->get( 'artifact_manager' )->latest( $this->param_int( $request, 'post_id' ) );
+
+		if ( ! $artifact ) {
+			return $this->ok( null );
+		}
+
+		return $this->ok( $artifact );
 	}
 
 	/**

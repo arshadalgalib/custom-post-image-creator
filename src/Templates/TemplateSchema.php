@@ -161,7 +161,7 @@ final class TemplateSchema {
 			'border_color'  => '#FFFFFF',
 			'shadow_blur'   => 0,
 			'shadow_color'  => 'rgba(0,0,0,0.35)',
-			'fallback'      => 'hide',
+			'fallback'      => 'gradient',
 			'natural_ratio' => true,
 			'conditions'    => array(),
 		);
@@ -805,7 +805,7 @@ final class TemplateSchema {
 
 		if ( in_array( $clean['type'], array( 'image', 'logo', 'watermark', 'svg' ), true ) ) {
 			$clean['fit'] = in_array( $clean['fit'], array( 'cover', 'contain', 'fill', 'none' ), true ) ? $clean['fit'] : 'cover';
-			$clean['fallback'] = in_array( $clean['fallback'], array( 'hide', 'gradient', 'image' ), true ) ? $clean['fallback'] : 'hide';
+			$clean['fallback'] = in_array( $clean['fallback'], array( 'hide', 'gradient', 'blur' ), true ) ? $clean['fallback'] : 'gradient';
 		}
 
 		return $clean;
