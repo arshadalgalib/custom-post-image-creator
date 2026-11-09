@@ -1,121 +1,119 @@
 === Custom Post Image Creator ===
 Contributors: cpicdev
-Tags: social media, image generator, facebook, telegram, bangla
+Tags: social media, image generator, facebook, telegram, bangla, bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 6.1.0
+Stable tag: 7.0.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Generate custom 1080×1080 social media photocard images for WordPress posts with full Bengali typography support, Facebook Page publishing, and Telegram channel sharing.
+Design social images for WordPress posts with correct Bengali typography, then publish them to Facebook Pages and Telegram channels with per-channel delivery tracking.
 
 == Description ==
 
-**Custom Post Image Creator** is a powerful WordPress plugin that automatically generates beautiful social media photocard images for your blog posts and publishes them to Facebook Pages and Telegram channels.
+**Custom Post Image Creator** turns your posts into finished social images and publishes them — without ever producing broken Bengali text.
 
-= Key Features =
+Most image tools draw Bengali text in PHP, where conjuncts and vowel signs break apart. This plugin does the opposite: the design is described once, then painted by the browser, which is the only engine on a typical web server that shapes Bengali correctly. Scheduled publishing is honest about this: if an image needs a browser and no editor is present, you are told, instead of silently posting a visually broken image.
 
-* **1080×1080 Photocard Generator** – Create stunning social media images with layered backgrounds, featured images, titles, dates, and logos.
-* **Full Bengali (Bangla) Support** – Bangla date formatting, Bangla digit conversion, Bangla fonts (Noto Serif Bengali, Hind Siliguri, SolaimanLipi, Siyam Rupali).
-* **HTML5 Canvas Preview** – Instant live preview with real-time customization.
-* **Facebook Graph API v22.0** – Post photocards directly to your Facebook Page with smart captions and auto-comments with post links.
-* **Telegram Bot API** – Send photocards to Telegram channels with formatted captions.
-* **Auto-Publishing** – Fully automatic editor-captured photocard sharing when a post is published.
-* **Bulk Operations** – Bulk ZIP download, bulk Facebook share, bulk Telegram share with progress tracking.
-* **Dark Mode** – Toggle dark mode for comfortable editing.
-* **Multiple Backgrounds** – Upload unlimited backgrounds with gallery management.
-* **Smart Caption Generator** – Automatically generates ~50-word Bangla summaries for Facebook captions.
-* **WP-Cron Queue** – Queued processing for heavy sites.
-* **Queue-Based Publishing** – WP-Cron processes and shares stored photocards in the background after publish.
+= Why this version is different =
+
+* **One design description, one result.** What you see in the studio and what gets stored come from the same render plan, so the preview cannot drift from the output.
+* **Complex-script aware.** The plugin knows which renderers can shape Bengali and refuses to pretend otherwise.
+* **Per-channel publishing.** Each Facebook Page and Telegram channel is a separate account with its own credentials, status and delivery history. One channel failing never rolls back another.
+* **No duplicate posts.** Every delivery carries an idempotency key. A retry after an ambiguous network failure asks for confirmation rather than risking a double post.
+* **Secrets stay secret.** Credentials are encrypted at rest, never returned to the browser, and never written to logs or diagnostics.
+* **No invented numbers.** Analytics separates what this site measured from what a platform reported, and shows "not fetched yet" instead of zero.
+
+= Features =
+
+* **Twelve starter designs** for Bengali news media, newspapers, magazines, corporate notices, education, Islamic quotes, political campaigns, events, announcements, breaking news and quote cards.
+* **Design studio** with a live canvas, layer list, drag-to-move and a property inspector.
+* **Multiple formats** — square (1080×1080), portrait (1080×1350), story (1080×1920), landscape (1200×675) and wide. Layouts re-anchor per format instead of being squashed.
+* **Brand kits** — colours, logos and Bengali type that designs inherit and can override.
+* **Template library** with revisions, restore, duplicate, favourites, search and JSON import/export.
+* **Scheduling calendar** and campaigns that group posts under one design and track what actually published.
+* **Queue** with retries, exponential backoff, stale-job recovery and a manual "process now" button.
+* **Diagnostics** that report what this installation can and cannot do, with a repair action that only touches schema and locks.
+* **Optional AI assistance** for headline, hashtag and alt-text suggestions — off by default, opt-in per site, always flagged for review, never applied automatically.
 
 = Requirements =
 
 * WordPress 5.8 or later
 * PHP 7.4 or later
-* Imagick PHP extension
-* Facebook App credentials (for Facebook publishing)
-* Telegram Bot Token (for Telegram publishing)
+* The OpenSSL PHP extension (for storing social account credentials)
+* A Facebook App and Page access token, and/or a Telegram bot token — only needed if you publish
 
-= Recommended Cron Setup (cPanel) =
+Bundled Bengali fonts (Noto Sans Bengali, Noto Serif Bengali, Hind Siliguri) are included in the plugin; no external font CDN is contacted.
 
-For reliable full automation, use a real server cron (not only visitor-triggered WP-Cron):
+= A note on automatic publishing and Bengali =
 
-1. Add this in `wp-config.php`:
+Your server cannot shape Bengali text. That is a property of PHP image libraries, not of this plugin. So:
 
-`define('DISABLE_WP_CRON', true);`
+* Images you generate while signed in look correct, always.
+* Scheduled or automatic publishing of Bengali images needs a browser to have rendered them first (open the post, or the studio, and save once).
+* When that has not happened, the delivery is held with a clear reason instead of publishing broken text.
 
-2. In cPanel -> Cron Jobs, run every 1 minute:
-
-`/usr/local/bin/php -q /home/CPANEL_USER/public_html/wp-cron.php > /dev/null 2>&1`
-
-Adjust the PHP binary and WordPress path for your server.
-
-= Full Automation Flow =
-
-When Auto Publish is enabled:
-
-1. Post is published in WordPress.
-2. Plugin stores a job in the queue (`cpic_publish_queue`).
-3. Cron worker (`cpic_cron_process_queue`) runs every minute.
-4. Worker prepares image:
-	- Uses editor-captured image if available.
-	- Falls back to server-side photocard generation automatically if not available.
-5. Worker posts to Facebook and/or Telegram automatically.
-6. On temporary API/network failure, job remains in queue for retry.
+Latin-only designs can be generated fully server-side.
 
 == Installation ==
 
-1. Upload the `custom-post-image-creator` folder to `/wp-content/plugins/`.
-2. Activate the plugin through the **Plugins** menu.
-3. Navigate to **Post Image Creator** in the admin menu.
-4. Configure your Facebook App, Telegram Bot, and image settings.
-5. Place Bengali font files (`.ttf`) in the `/fonts/` directory.
+1. Upload the plugin folder to `/wp-content/plugins/` or install the ZIP from Plugins → Add New.
+2. Activate the plugin. The database tables are created on activation.
+3. Open **Post Images → Design Studio** and save a design.
+4. Open **Post Images → Social Accounts** to connect a Facebook Page or a Telegram channel.
+5. Optional: **Settings → Automation** to enable automatic publishing (off by default).
 
 == Frequently Asked Questions ==
 
-= Where do I get Bengali fonts? =
+= Does this work with the block editor and the classic editor? =
 
-Download Noto Serif Bengali from Google Fonts and Hind Siliguri from Google Fonts. Place the `.ttf` files in the plugin's `/fonts/` directory.
+Yes. The block editor gets a "Social image" sidebar panel; the classic editor gets a metabox. Both link to the full studio.
 
-= Do I need Imagick? =
+= Will it post automatically when I publish? =
 
-Imagick is required for image compositing. Bangla-safe full auto-publishing works by capturing the photocard in the WordPress editor, then sharing automatically through the WP-Cron queue.
+Only if you turn that on: there is a master switch and a per-platform switch in Settings → Automation. Both are off by default.
 
-= How do I connect Facebook? =
+= What happens if Facebook times out? =
 
-1. Create a Facebook App at developers.facebook.com.
-2. Enter your App ID and Secret in the plugin settings.
-3. Generate a User Access Token with `pages_manage_posts` and `pages_read_engagement` permissions.
-4. Click "Get Pages" and select your page.
+The delivery is marked as ambiguous, not retried automatically, and it asks you to confirm before retrying, because a timeout does not prove nothing was posted.
+
+= Can I use my own Bengali font? =
+
+Yes — drop it in the `fonts/` folder and add it through the `cpic/fonts` filter. The studio loads it through CSS `@font-face`.
+
+= Is anything sent to a third party? =
+
+Only the requests needed to publish to the platforms you connected. AI assistance is off unless you enable it and enter your own provider key.
+
+== Screenshots ==
+
+1. The design studio with the layer list and property inspector.
+2. The template library with starter designs.
+3. Brand kits.
+4. The publishing calendar.
+5. Diagnostics.
 
 == Changelog ==
 
-= 5.2.0 =
-* Timezone-safe Bangla date rendering (wp_date instead of date()).
-* Bengali-safe caption word counting (str_word_count only handled ASCII).
-* Telegram HTML caption escaping so titles with & < > no longer break sending.
-* cURL availability checks for Facebook and Telegram sharing.
-* Temp image files are now always cleaned up after sharing.
-* Removed external CDN dependencies (JSZip, FileSaver, jQuery UI CSS).
-* Native HTML5 date pickers replace jQuery UI datepicker.
-* Native ZIP downloader replaces JSZip + FileSaver.
-* App Secret / Bot Token are no longer echoed back to the browser.
-* Cron scheduling moved to init for reliable registration.
-* Auto-publish share copies are cleaned up after each network post.
-* Added uninstall.php for complete data removal on delete.
-* Restructured and modernized codebase with reduced warnings.
+= 7.0.0 =
+* Complete rewrite. New architecture (service container, repositories, REST API under `cpic/v1`), 16 database tables, and a migration path from 5.x/6.x data.
+* Design studio: canvas renderer driven by the server's render plan, layer list, inspector, drag-to-move, keyboard-accessible selection.
+* Twelve starter designs and a full design schema with per-format layouts.
+* Multi-account publishing: several Facebook Pages and Telegram channels, each with its own status, credentials and delivery history.
+* Idempotent deliveries with explicit retry, cancel and undo, plus duplicate-risk protection.
+* Queue and scheduler rebuilt: claimed jobs, backoff, stale recovery, cron health reporting.
+* Campaigns, publishing calendar and honest analytics.
+* Brand kits and template revisions with restore, duplicate and JSON import/export.
+* Diagnostics with a real repair action and credential-presence reporting.
+* Secrets are encrypted at rest and fail closed when the PHP build cannot encrypt.
+* Admin screens state what they cannot do (for example, background rendering of Bengali) instead of failing silently.
+* 282 automated PHP assertions run in CI without a PHP binary, plus a harness that renders every admin screen and a real design to PNG.
 
-= 5.0 =
-* Initial release with full feature set.
-* Smart Facebook caption generator.
-* Telegram integration.
-* Auto-publishing with editor-rendered Bangla image capture and WP-Cron queue.
-* Bengali localization system.
-* Dark mode.
-* Bulk operations with progress tracking.
+= 6.x and earlier =
+See the previous readme for the 5.x/6.x history. Legacy classes (`CPIC_Template_Manager`, `CPIC_Image_Generator`, `CPIC_Facebook_Poster`, `CPIC_Telegram_Poster`, `CPIC_Settings`) remain loadable through compatibility adapters, and existing settings and credentials are imported once on upgrade.
 
 == Upgrade Notice ==
 
-= 5.2.0 =
-Maintenance and stability release. Fixes Bengali caption issues, Telegram caption failures, credential exposure in the admin UI, file cleanup leaks, and removes all external CDN dependencies.
+= 7.0.0 =
+Major release with a new database schema and a new studio. Your existing templates, settings and single-account Facebook/Telegram credentials are imported automatically on the first admin page load. Automatic publishing stays off until you enable it.

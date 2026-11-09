@@ -563,6 +563,19 @@ function get_role( $name ) {
 		}
 
 		/**
+		 * Live capability map, as WP_Role exposes it.
+		 *
+		 * @return array<string,bool>
+		 */
+		public function __get( $property ) {
+			if ( 'capabilities' === $property ) {
+				return isset( $GLOBALS['cpic_test_roles'][ $this->name ] ) ? (array) $GLOBALS['cpic_test_roles'][ $this->name ] : array();
+			}
+
+			return null;
+		}
+
+		/**
 		 * Add a capability.
 		 *
 		 * @param string $cap Capability.
@@ -2259,4 +2272,42 @@ function get_posts( $args = array() ) {
 	$query = new WP_Query( $args );
 
 	return $query->posts;
+}
+
+/**
+ * Global roles object (subset of WP_Roles used by the plugin).
+ *
+ * @return object
+ */
+function wp_roles() {
+	return new class() {
+		/**
+		 * Role map: slug => { name, capabilities }.
+		 *
+		 * @var array<string,array<string,mixed>>
+		 */
+		public $roles = array();
+
+		/**
+		 * Constructor: mirror the stub role store.
+		 */
+		public function __construct() {
+			foreach ( (array) $GLOBALS['cpic_test_roles'] as $slug => $caps ) {
+				$this->roles[ $slug ] = array(
+					'name'         => ucfirst( (string) $slug ),
+					'capabilities' => (array) $caps,
+				);
+			}
+		}
+
+		/**
+		 * Get a role.
+		 *
+		 * @param string $name Role.
+		 * @return object|null
+		 */
+		public function get_role( $name ) {
+			return isset( $this->roles[ $name ] ) ? get_role( (string) $name ) : null;
+		}
+	};
 }

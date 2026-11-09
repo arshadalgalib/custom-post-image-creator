@@ -1,11 +1,16 @@
+# Dependencies
 node_modules/
 vendor/
-.DS_Store
-*.log
-dist/
-build/
+tools/harness/node_modules/
+
+# Build output
+/dist/
+/build/
 *.zip
 
-# Verification harness
-tools/harness/node_modules/
+# Verification harness artifacts
 tools/harness/out/
+
+# OS / editors
+.DS_Store
+*.log

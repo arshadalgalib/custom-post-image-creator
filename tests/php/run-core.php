@@ -437,6 +437,82 @@ foreach ( $override_plan['layers'] as $layer ) {
 }
 CPIC_Test::equal( 'কাস্টম শিরোনাম', $override_headline, 'Text overrides reach the plan' );
 
+/* ═══ 8b. Rendering: image fallbacks ════════════════════════════ */
+
+CPIC_Test::suite( 'Rendering: image fallbacks' );
+
+$schema = $plugin->service( 'template_schema' );
+CPIC_Test::equal( 'gradient', $schema->default_image()['fallback'], 'Image layers default to a gradient placeholder' );
+
+$validated = $schema->validate(
+	array(
+		'canvas'   => array( 'width' => 1080, 'height' => 1080, 'format' => 'square' ),
+		'elements' => array(
+			'photo' => array(
+				'type'     => 'image',
+				'url'      => '',
+				'fallback' => 'hide',
+				'x'        => 0,
+				'y'        => 0,
+				'width'    => 1080,
+				'height'   => 1080,
+			),
+			'bogus' => array(
+				'type'     => 'image',
+				'url'      => '',
+				'fallback' => 'javascript:alert(1)',
+				'x'        => 0,
+				'y'        => 0,
+				'width'    => 100,
+				'height'   => 100,
+			),
+		),
+	)
+);
+
+CPIC_Test::ok( isset( $validated['document']['elements']['photo'] ), 'Image elements validate' );
+CPIC_Test::equal( 'hide', $validated['document']['elements']['photo']['fallback'], 'Explicit hide fallback survives sanitising' );
+CPIC_Test::equal( 'gradient', $validated['document']['elements']['bogus']['fallback'], 'Unknown fallback coerces to gradient' );
+
+$fallback_plan = $plan_builder->build(
+	array(
+		'document' => $validated['document'],
+		'format'   => 'square',
+		'post_id'  => 0,
+	)
+);
+
+CPIC_Test::ok( ! is_wp_error( $fallback_plan ), 'Plan builds without a featured image', is_wp_error( $fallback_plan ) ? $fallback_plan->get_error_message() : null );
+
+$planned_ids = array();
+foreach ( (array) $fallback_plan['layers'] as $layer ) {
+	$planned_ids[] = $layer['id'];
+}
+CPIC_Test::ok( in_array( 'bogus', $planned_ids, true ), 'Gradient image layer survives a missing image', $planned_ids );
+CPIC_Test::ok( ! in_array( 'photo', $planned_ids, true ), 'Hidden image layer is dropped from the plan', $planned_ids );
+
+$bogus_layer = null;
+foreach ( (array) $fallback_plan['layers'] as $layer ) {
+	if ( 'bogus' === $layer['id'] ) {
+		$bogus_layer = $layer;
+	}
+}
+CPIC_Test::equal( 'gradient', $bogus_layer['image']['fallback'], 'Plan forwards the fallback to the canvas renderer' );
+
+/* ═══ 8c. Uninstall contract ════════════════════════════════════ */
+
+CPIC_Test::suite( 'Security: uninstall contract' );
+
+$uninstall_keys = \CPIC\Security\Settings::option_keys();
+CPIC_Test::ok( count( $uninstall_keys ) > 50, 'Uninstall covers the settings schema', count( $uninstall_keys ) );
+CPIC_Test::ok( in_array( 'cpic_canvas_width', $uninstall_keys, true ), 'Schema keys are enumerated for uninstall' );
+CPIC_Test::ok( file_exists( CPIC_PLUGIN_DIR . 'uninstall.php' ), 'uninstall.php ships with the plugin' );
+
+$uninstall_source = (string) file_get_contents( CPIC_PLUGIN_DIR . 'uninstall.php' );
+CPIC_Test::ok( false !== strpos( $uninstall_source, 'cpic_cleanup_on_uninstall' ), 'Uninstall is opt-in for destructive cleanup' );
+CPIC_Test::ok( false !== strpos( $uninstall_source, 'option_keys()' ), 'Uninstall reads option keys from the schema' );
+CPIC_Test::ok( false !== strpos( $uninstall_source, "defined( 'WP_UNINSTALL_PLUGIN' )" ), 'Uninstall refuses to run outside the uninstall request' );
+
 /* ═══ 13. Render signature / caching ════════════════════════════ */
 
 CPIC_Test::suite( 'Rendering: cache signatures' );

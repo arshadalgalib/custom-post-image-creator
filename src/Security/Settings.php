@@ -152,6 +152,25 @@ final class Settings {
 	}
 
 	/**
+	 * Every option key the plugin owns (schema-driven, for uninstall/export).
+	 *
+	 * @return array<int,string>
+	 */
+	public static function option_keys() {
+		// The schema has no constructor dependencies, so a throwaway instance is
+		// safe here (uninstall.php calls this with no container available).
+		$instance = ( new \ReflectionClass( __CLASS__ ) )->newInstanceWithoutConstructor();
+		$keys     = array_keys( $instance->definitions() );
+
+		/**
+		 * Filter the option keys treated as plugin-owned.
+		 *
+		 * @param array<int,string> $keys Keys.
+		 */
+		return array_values( array_unique( (array) apply_filters( 'cpic/settings/option_keys', $keys ) ) );
+	}
+
+	/**
 	 * Section labels.
 	 *
 	 * @return array<string,string>

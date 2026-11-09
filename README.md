@@ -1,101 +1,93 @@
-# Custom Post Image Creator v5.2.0
+# Custom Post Image Creator — 7.0
 
-Custom Post Image Creator generates social media photocards for WordPress posts and publishes them automatically to Facebook Pages and Telegram channels.
+Design social images for WordPress posts with correct Bengali typography, then publish them to Facebook Pages and Telegram channels with per-channel delivery tracking.
 
-## Features
+## The one idea behind this version
 
-- Photocard generation from post data
-  - Background
-  - Featured image
-  - Bangla title
-  - Bangla date
-  - Logo
-- Facebook Page publishing (Graph API)
-- Telegram publishing (Bot API)
-- Auto-publish queue with WP-Cron worker
-- Bulk operations for download/share
-- Bangla-friendly typography support
+Your web server cannot shape Bengali text. PHP image libraries (GD, and Imagick without a shaping library) draw conjuncts and vowel signs as separate glyphs, which is why Bengali text in server-generated images so often looks broken.
 
-## Full Automation Workflow
+So the plugin treats the browser as the shaping engine, and is honest about the consequences:
 
-When Auto Publish is enabled, the plugin follows this queue-based flow:
+- A design is described once, as a **render plan**.
+- The plan is painted by the browser (studio, editor, or a headless browser you add through a filter).
+- What the studio shows and what is stored are produced from the same plan, so they cannot drift apart.
+- When a scheduled publish needs a browser and none is available, the delivery is **held with a reason** instead of quietly publishing a broken image.
 
-1. WordPress post is published
-2. Plugin saves a queue job in database option `cpic_publish_queue`
-3. Cron worker runs every minute (`cpic_cron_process_queue`)
-4. Worker prepares image:
-   - Uses editor-captured image if available
-   - Falls back to server-side generation automatically if no stored image exists
-5. Worker posts to Facebook and/or Telegram
-6. On transient failures, job remains queued for retry
+Latin-only designs can render fully server-side; the plugin reports which renderers can shape what, rather than implying a capability it does not have.
 
-This supports no-click automation after publish.
+## What's in the box
 
-## cPanel Cron Setup (Recommended)
+| Area | What it does |
+| --- | --- |
+| Design studio | Live canvas, layer list, drag-to-move, property inspector, format switching |
+| Templates | Twelve starters, revisions with restore, duplicate, favourites, search, JSON import/export |
+| Brand kits | Colours, logos and fonts that designs inherit and may override |
+| Publishing | Multiple Facebook Pages and Telegram channels, per-channel status and history |
+| Scheduling | Calendar, campaigns, and a queue with backoff and stale-job recovery |
+| Analytics | Measured-on-this-site numbers separated from platform-reported metrics |
+| Diagnostics | Capability report, credential presence (never values), safe repair |
+| AI (optional) | Headline / hashtag / alt-text suggestions, off by default, always reviewed |
 
-Use real server cron for reliable automation.
-
-### 1) Disable visitor-triggered WP-Cron
-
-Add this line to `wp-config.php`:
-
-```php
-define('DISABLE_WP_CRON', true);
-```
-
-### 2) Add cPanel cron job (every 1 minute)
-
-Example command:
-
-```bash
-/usr/local/bin/php -q /home/CPANEL_USER/public_html/wp-cron.php > /dev/null 2>&1
-```
-
-Adjust PHP path and WordPress path for your server.
-
-If PHP CLI path is not valid on your host, use HTTP fallback:
-
-```bash
-curl -fsS "https://YOUR-DOMAIN.com/wp-cron.php?doing_wp_cron" > /dev/null 2>&1
-```
-
-## Required Plugin Settings
-
-In plugin dashboard, ensure:
-
-- Auto Publish = ON
-- Auto Facebook = ON (if Facebook automation needed)
-- Auto Telegram = ON (if Telegram automation needed)
-- Valid Facebook Page access token and selected page
-- Valid Telegram bot token and chat id
-
-## Practical Reliability Notes
-
-- The automation is fully queue-based and runs without manual share clicks.
-- External APIs can still fail (expired tokens, rate limits, network issues).
-- Failures are logged and retried by queue processing.
-- If logs show only "Auto-publish task queued" and never "task processing started", cron is not executing reliably. This version also triggers immediate processing on publish/image-capture for due tasks, but server cron should still be configured correctly.
-- Worker diagnostics now include these log lines:
-  - Worker tick: queue processing started.
-  - Worker tick: queue processing finished.
-  - Worker tick: queue empty.
-
-## Server Requirements
+## Requirements
 
 - WordPress 5.8+
 - PHP 7.4+
-- Imagick extension
-- Python + PangoCairo optional (improves complex Bangla text shaping for server overlay path)
+- OpenSSL PHP extension (for storing account credentials)
 
-## File Overview
+## Architecture
 
-- Main bootstrap: `custom-post-image-creator.php`
-- Queue worker: `includes/class-auto-publisher.php`
-- Image generator: `includes/class-image-generator.php`
-- Facebook API: `includes/class-facebook-api.php`
-- Telegram API: `includes/class-telegram-api.php`
-- Admin dashboard template: `templates/admin-dashboard.php`
+```
+custom-post-image-creator.php   bootstrap: constants, autoloader, plugin instance
+src/Core/                       container, event dispatcher, modules, service providers
+src/Database/                   schema, migrator, repositories (16 tables)
+src/Templates/                  design schema, template manager, starter library, importer
+src/Rendering/                  render plan, formats, fonts, renderers, artifacts, signatures
+src/Publishing/                 accounts, publishers (Facebook, Telegram), deliveries, captions
+src/Automation/                 scheduler, queue, job runner, health monitor
+src/Campaigns/                  campaigns and the publishing calendar
+src/Analytics/                  honest internal + external metrics
+src/AI/                         optional, opt-in provider framework
+src/Media/                      media library and SVG safety screening
+src/Security/                   settings schema, capabilities, nonces, encryption
+src/REST/                       cpic/v1 controllers
+src/Admin/                      menus, screens, editor integration
+templates/admin/                admin views
+resources/                      studio + admin CSS/JS, editor panel
+tests/php/                      PHP suite (runs in php-wasm, no PHP binary needed)
+tools/harness/                  verification harness (development only, not shipped)
+```
 
-## Version
+Key contracts:
 
-Current plugin version: 5.2.0
+- `CPIC\` maps PSR-4 onto `src/`.
+- A service is resolved from the container by id (`$plugin->service('render_plan')`).
+- The **design document** is the render contract; everything else derives from it.
+- Publishing reads only `cpic_artifacts` rows, and one channel's failure never affects another.
+- Secrets are encrypted at rest, never sent to JavaScript, and never logged.
+
+## Development
+
+There is no PHP binary in the verification environment, so the suite runs the real code inside WebAssembly PHP with real SQLite:
+
+```bash
+cd tools/harness
+npm install
+
+# syntax gate for every PHP file in the plugin
+node php-lint.mjs ../../
+
+# the PHP suite: 282 assertions against SQLite, including encryption and rendering contracts
+node run-php-tests.mjs ../../
+
+# every admin screen, rendered against real services and seeded content
+node render-admin-screens.mjs ../../
+
+# paint a real render plan to a PNG (proves the drawing code, not just the data)
+node render-canvas.mjs
+```
+
+The harness is intentionally **not** part of the plugin build.
+
+## License
+
+GPLv2 or later.

@@ -1,84 +1,146 @@
 <?php
 /**
- * Uninstall handler – removes all plugin options, post meta and the
- * custom log table when the plugin is deleted from WordPress.
+ * Uninstall handler.
+ *
+ * Data is kept unless the site explicitly opted in to removal
+ * (Settings → Storage → "Remove all data when the plugin is deleted"),
+ * because deleting a plugin should not silently destroy a newsroom's designs,
+ * brand kits and publishing history.
  *
  * @package CustomPostImageCreator
  */
 
 if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
-    exit;
+	exit;
 }
 
 global $wpdb;
 
-$cpic_options = array(
-    'cpic_title_font',
-    'cpic_title_size',
-    'cpic_title_color',
-    'cpic_title_offset_x',
-    'cpic_title_offset_y',
-    'cpic_date_font',
-    'cpic_date_color',
-    'cpic_date_bg_color',
-    'cpic_date_offset_x',
-    'cpic_date_offset_y',
-    'cpic_logo',
-    'cpic_logo_width',
-    'cpic_logo_offset_x',
-    'cpic_logo_offset_y',
-    'cpic_feat_offset_x',
-    'cpic_feat_offset_y',
-    'cpic_feat_width',
-    'cpic_feat_height',
-    'cpic_canvas_width',
-    'cpic_canvas_height',
-    'cpic_background_images',
-    'cpic_active_background',
-    'cpic_comment_message',
-    'cpic_fb_app_id',
-    'cpic_fb_app_secret',
-    'cpic_fb_page_id',
-    'cpic_fb_page_name',
-    'cpic_fb_page_token',
-    'cpic_tg_bot_token',
-    'cpic_tg_chat_id',
-    'cpic_auto_publish',
-    'cpic_auto_fb',
-    'cpic_auto_tg',
-    'cpic_auto_delay',
-    'cpic_publish_queue',
-
-    /* v6 automation */
-    'cpic_auto_generate',
-    'cpic_auto_comment',
-    'cpic_max_retries',
-    'cpic_default_template_id',
-    'cpic_db_version',
-);
-
-foreach ( $cpic_options as $option ) {
-    delete_option( $option );
+if ( ! defined( 'CPIC_PLUGIN_FILE' ) ) {
+	define( 'CPIC_PLUGIN_FILE', __FILE__ );
 }
 
-// Clean up per-post meta.
-delete_post_meta_by_key( 'cpic_last_shared_to_facebook' );
-delete_post_meta_by_key( 'cpic_last_shared_to_telegram' );
-delete_post_meta_by_key( 'cpic_auto_canvas_image_path' );
+// The plugin's own settings schema is the single source of truth for options.
+$cpic_settings_file = __DIR__ . '/src/Security/Settings.php';
 
-// Remove scheduled cron events.
-wp_clear_scheduled_hook( 'cpic_cron_process_queue' );
-wp_clear_scheduled_hook( 'cpic_cron_process_jobs' );
+$cpic_option_keys = array();
 
-// Drop the custom tables.
-$table = $wpdb->prefix . 'cpic_logs';
-$wpdb->query( "DROP TABLE IF EXISTS {$table}" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange
+if ( file_exists( $cpic_settings_file ) ) {
+	require_once $cpic_settings_file;
 
-$table = $wpdb->prefix . 'cpic_templates';
-$wpdb->query( "DROP TABLE IF EXISTS {$table}" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange
+	if ( class_exists( '\\CPIC\\Security\\Settings' ) && method_exists( '\\CPIC\\Security\\Settings', 'option_keys' ) ) {
+		$cpic_option_keys = (array) \CPIC\Security\Settings::option_keys();
+	}
+}
 
-$table = $wpdb->prefix . 'cpic_category_mappings';
-$wpdb->query( "DROP TABLE IF EXISTS {$table}" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange
+$cpic_legacy_options = array(
+	'cpic_publish_queue',
+	'cpic_auto_canvas_image_path',
+	'cpic_cron_installed',
+	'cpic_legacy_imported',
+	'cpic_db_version',
+	'cpic_migration_state',
+);
 
-$table = $wpdb->prefix . 'cpic_jobs';
-$wpdb->query( "DROP TABLE IF EXISTS {$table}" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange
+$cpic_remove = (bool) get_option( 'cpic_cleanup_on_uninstall', 0 );
+
+if ( ! $cpic_remove ) {
+	// Always remove request-scoped state; keep the site's content.
+	foreach ( array( 'cpic_queue_lock', 'cpic_migration_running' ) as $cpic_transient ) {
+		delete_transient( $cpic_transient );
+	}
+
+	delete_option( 'cpic_cron_installed' );
+
+	return;
+}
+
+/* ── Full removal (opt-in) ──────────────────────────────────────── */
+
+foreach ( array_unique( array_merge( $cpic_option_keys, $cpic_legacy_options ) ) as $cpic_option ) {
+	delete_option( $cpic_option );
+}
+
+foreach ( array( 'cpic_queue_lock', 'cpic_migration_running' ) as $cpic_transient ) {
+	delete_transient( $cpic_transient );
+}
+
+// Post meta written by 6.x and by the v7 editor integration.
+foreach ( array( 'cpic_last_shared_to_facebook', 'cpic_last_shared_to_telegram', 'cpic_auto_canvas_image_path', '_cpic_editor_image' ) as $cpic_meta ) {
+	delete_post_meta_by_key( $cpic_meta );
+}
+
+// Scheduled events (both generations of hook names).
+$cpic_hooks = array(
+	'cpic_cron_process_queue',
+	'cpic_cron_process_jobs',
+	'cpic_run_queue',
+	'cpic_heartbeat',
+	'cpic_cleanup',
+);
+
+foreach ( $cpic_hooks as $cpic_hook ) {
+	wp_clear_scheduled_hook( $cpic_hook );
+}
+
+// Capabilities added to roles.
+$cpic_roles = function_exists( 'wp_roles' ) ? wp_roles() : null;
+
+if ( $cpic_roles && ! empty( $cpic_roles->roles ) ) {
+	foreach ( array_keys( $cpic_roles->roles ) as $cpic_role_name ) {
+		$cpic_role = get_role( $cpic_role_name );
+
+		if ( ! $cpic_role ) {
+			continue;
+		}
+
+		foreach ( array_keys( $cpic_role->capabilities ) as $cpic_cap ) {
+			if ( 0 === strpos( (string) $cpic_cap, 'cpic_' ) ) {
+				$cpic_role->remove_cap( $cpic_cap );
+			}
+		}
+	}
+}
+
+// Tables declared by the schema (never a hand-maintained list).
+$cpic_tables = array();
+
+$cpic_schema_file = __DIR__ . '/src/Database/Schema.php';
+
+if ( file_exists( $cpic_schema_file ) ) {
+	require_once $cpic_schema_file;
+
+	if ( class_exists( '\\CPIC\\Database\\Schema' ) ) {
+		$cpic_tables = array_values( \CPIC\Database\Schema::tables() );
+	}
+}
+
+foreach ( $cpic_tables as $cpic_table ) {
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.NotPrepared
+	$wpdb->query( "DROP TABLE IF EXISTS `{$cpic_table}`" );
+}
+
+// Generated images (only the plugin's own directories).
+$cpic_uploads = wp_upload_dir();
+$cpic_dirs    = array( 'cpic-artifacts', 'cpic-generated' );
+
+foreach ( $cpic_dirs as $cpic_dir ) {
+	$cpic_path = trailingslashit( $cpic_uploads['basedir'] ) . $cpic_dir;
+
+	if ( ! is_dir( $cpic_path ) ) {
+		continue;
+	}
+
+	$cpic_files = glob( trailingslashit( $cpic_path ) . '*' );
+
+	if ( is_array( $cpic_files ) ) {
+		foreach ( $cpic_files as $cpic_file ) {
+			if ( is_file( $cpic_file ) ) {
+				wp_delete_file( $cpic_file );
+			}
+		}
+	}
+
+	// Remove the (now empty) directory.
+	@rmdir( $cpic_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+}
