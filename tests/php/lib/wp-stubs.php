@@ -1459,6 +1459,10 @@ function is_admin() {
  * @return void
  */
 function flush_rewrite_rules( $hard = true ) {
+	// Tests can simulate a host where this step explodes.
+	if ( ! empty( $GLOBALS['cpic_test_fail_rewrite_flush'] ) ) {
+		throw new \RuntimeException( 'simulated flush_rewrite_rules() failure' );
+	}
 }
 
 /**
@@ -2310,4 +2314,37 @@ function wp_roles() {
 			return isset( $this->roles[ $name ] ) ? get_role( (string) $name ) : null;
 		}
 	};
+}
+
+/* ─── Plugin path helpers (mirror wp-includes/plugin.php) ───────── */
+
+/**
+ * Filesystem path of the directory that contains a plugin file.
+ *
+ * @param string $file Plugin file.
+ * @return string Trailing-slashed path.
+ */
+function plugin_dir_path( $file ) {
+	return trailingslashit( dirname( (string) $file ) );
+}
+
+/**
+ * URL of the directory that contains a plugin file.
+ *
+ * @param string $file Plugin file.
+ * @return string Trailing-slashed URL.
+ */
+function plugin_dir_url( $file ) {
+	return trailingslashit( 'http://example.test/wp-content/plugins/' . basename( dirname( (string) $file ) ) );
+}
+
+/**
+ * Plugin basename, e.g. `dir/plugin.php`.
+ *
+ * @param string $file Plugin file.
+ * @return string
+ */
+function plugin_basename( $file ) {
+	$file = str_replace( '\\', '/', (string) $file );
+	return basename( dirname( $file ) ) . '/' . basename( $file );
 }

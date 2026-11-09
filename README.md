@@ -1,4 +1,4 @@
-# Custom Post Image Creator — 7.0
+# Custom Post Image Creator — 7.0.1
 
 Design social images for WordPress posts with correct Bengali typography, then publish them to Facebook Pages and Telegram channels with per-channel delivery tracking.
 
@@ -73,18 +73,21 @@ There is no PHP binary in the verification environment, so the suite runs the re
 cd tools/harness
 npm install
 
-# syntax gate for every PHP file in the plugin
-node php-lint.mjs ../../
+# everything below, in order, with one exit code
+node verify.mjs
 
-# the PHP suite: 282 assertions against SQLite, including encryption and rendering contracts
-node run-php-tests.mjs ../../
-
-# every admin screen, rendered against real services and seeded content
-node render-admin-screens.mjs ../../
-
-# paint a real render plan to a PNG (proves the drawing code, not just the data)
-node render-canvas.mjs
+# ...or one gate at a time:
+node php-lint.mjs ../../                          # syntax gate
+node smoke.mjs tools/harness/class-integrity.php  # every class autoloads, every service resolves
+node smoke.mjs tools/harness/activation-smoke.php # fires the real activation hook from the entry file
+node run-php-tests.mjs ../../                     # 312 assertions against SQLite
+node render-admin-screens.mjs ../../              # 11 admin screens
+node render-canvas.mjs                            # paint a real plan to a PNG
 ```
+
+The integrity and activation checks exist because of a real 7.0.0 bug: a class
+file lived in `Providers/` while declaring `namespace CPIC\Publishing`, which is
+invisible to PSR-4. The repo suite never noticed; the archive check did.
 
 The harness is intentionally **not** part of the plugin build.
 

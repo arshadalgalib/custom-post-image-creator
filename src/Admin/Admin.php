@@ -264,6 +264,8 @@ final class Admin {
 			return;
 		}
 
+		$this->activation_notice();
+
 		$report = $this->container->get( 'health' )->summary();
 
 		if ( ! empty( $report['problems'] ) ) {
@@ -339,6 +341,40 @@ final class Admin {
 		);
 
 		return $actions;
+	}
+
+	/**
+	 * Surface a failed activation step.
+	 *
+	 * Activation no longer fatals (see `Plugin::on_activate()`), so without
+	 * this the site owner would see a plugin that half-installed with no
+	 * explanation. The notice names the step, the error and the PHP version so
+	 * a support request carries the facts.
+	 *
+	 * @return void
+	 */
+	private function activation_notice() {
+		$report = get_option( 'cpic_activation_errors' );
+
+		if ( ! is_array( $report ) || empty( $report['errors'] ) ) {
+			return;
+		}
+
+		echo '<div class="notice notice-error"><p><strong>';
+		esc_html_e( 'Post Image Creator could not finish setting up.', 'custom-post-image-creator' );
+		echo '</strong></p><ul class="cpic-notice-list">';
+
+		foreach ( (array) $report['errors'] as $step => $message ) {
+			echo '<li><code>' . esc_html( (string) $step ) . '</code>: ' . esc_html( (string) $message ) . '</li>';
+		}
+
+		echo '</ul><p>';
+		printf(
+			/* translators: %s: PHP version */
+			esc_html__( 'PHP %s. Fix the cause above, then deactivate and reactivate the plugin.', 'custom-post-image-creator' ),
+			esc_html( isset( $report['php'] ) ? (string) $report['php'] : PHP_VERSION )
+		);
+		echo ' <a href="' . esc_url( admin_url( 'admin.php?page=cpic-diagnostics' ) ) . '">' . esc_html__( 'Open diagnostics', 'custom-post-image-creator' ) . '</a></p></div>';
 	}
 
 	/**

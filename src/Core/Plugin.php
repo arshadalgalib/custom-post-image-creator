@@ -144,14 +144,61 @@ final class Plugin {
 	/**
 	 * Activation handler.
 	 *
+	 * Each step is isolated: a host that blocks one thing (a read-only uploads
+	 * directory, a missing DB privilege, a PHP extension the renderer needs)
+	 * must not turn into "the plugin could not be activated because it
+	 * triggered a fatal error". Failures are recorded and surfaced as an admin
+	 * notice so the site owner can see exactly which step failed and why.
+	 *
 	 * @return void
 	 */
 	public function on_activate() {
-		$this->service( 'migrator' )->install();
-		$this->service( 'scheduler' )->install_events();
-		$this->service( 'capabilities' )->install_roles();
-		$this->service( 'settings' )->ensure_defaults();
-		flush_rewrite_rules( false );
+		$failures = array();
+
+		$steps = array(
+			'database'     => static function ( Plugin $plugin ) {
+				$plugin->service( 'migrator' )->install();
+			},
+			'scheduler'    => static function ( Plugin $plugin ) {
+				$plugin->service( 'scheduler' )->install_events();
+			},
+			'capabilities' => static function ( Plugin $plugin ) {
+				$plugin->service( 'capabilities' )->install_roles();
+			},
+			'settings'     => static function ( Plugin $plugin ) {
+				$plugin->service( 'settings' )->ensure_defaults();
+			},
+			'rewrites'     => static function () {
+				flush_rewrite_rules( false );
+			},
+		);
+
+		foreach ( $steps as $step => $callback ) {
+			try {
+				$callback( $this );
+			} catch ( \Throwable $e ) {
+				$failures[ $step ] = $e->getMessage() . ' (' . basename( $e->getFile() ) . ':' . $e->getLine() . ')';
+
+				if ( function_exists( 'error_log' ) ) { // phpcs:ignore WordPress.PHP.DevelopmentFunctions
+					error_log( 'CPIC activation step "' . $step . '" failed: ' . $failures[ $step ] ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions
+				}
+			}
+		}
+
+		if ( ! empty( $failures ) ) {
+			update_option(
+				'cpic_activation_errors',
+				array(
+					'time'   => time(),
+					'php'    => PHP_VERSION,
+					'errors' => $failures,
+				),
+				false
+			);
+			return;
+		}
+
+		delete_option( 'cpic_activation_errors' );
 	}
 
 	/**

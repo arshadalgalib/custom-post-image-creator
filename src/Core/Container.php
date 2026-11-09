@@ -64,6 +64,20 @@ final class Container {
 	}
 
 	/**
+	 * Every registered service id (used by diagnostics and integrity checks).
+	 *
+	 * @return array<int,string>
+	 */
+	public function ids() {
+		$ids = array_merge( array_keys( $this->instances ), array_keys( $this->factories ) );
+
+		$ids = array_values( array_unique( $ids ) );
+		sort( $ids );
+
+		return $ids;
+	}
+
+	/**
 	 * Get a service, building it on first use.
 	 *
 	 * @param string $id Service id.

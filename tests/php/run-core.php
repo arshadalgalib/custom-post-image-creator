@@ -513,6 +513,83 @@ CPIC_Test::ok( false !== strpos( $uninstall_source, 'cpic_cleanup_on_uninstall' 
 CPIC_Test::ok( false !== strpos( $uninstall_source, 'option_keys()' ), 'Uninstall reads option keys from the schema' );
 CPIC_Test::ok( false !== strpos( $uninstall_source, "defined( 'WP_UNINSTALL_PLUGIN' )" ), 'Uninstall refuses to run outside the uninstall request' );
 
+/* ═══ 8d. Autoload integrity ═══════════════════════════════════ */
+
+CPIC_Test::suite( 'Core: autoload integrity' );
+
+// Every class the plugin declares must map to the file PSR-4 expects. A file
+// whose namespace does not match its directory is invisible to the autoloader
+// and only surfaces as a fatal at runtime (the v7.0.0 activation bug).
+$cpic_bad_paths = array();
+$cpic_iterator  = new RecursiveIteratorIterator(
+	new RecursiveDirectoryIterator( CPIC_PLUGIN_DIR . 'src', FilesystemIterator::SKIP_DOTS )
+);
+
+foreach ( $cpic_iterator as $cpic_file ) {
+	if ( 'php' !== strtolower( $cpic_file->getExtension() ) ) {
+		continue;
+	}
+
+	$path = $cpic_file->getPathname();
+	$code = (string) file_get_contents( $path );
+
+	if ( ! preg_match( '/^namespace\s+([^;]+);/m', $code, $ns_match ) ) {
+		continue;
+	}
+
+	$ns   = trim( $ns_match[1] );
+	$want = 'CPIC\\' . str_replace( '/', '\\', trim( substr( dirname( $path ), strlen( rtrim( CPIC_PLUGIN_DIR, '/' ) . '/src' ) ), '/' ) );
+
+	if ( $ns !== rtrim( $want, '\\' ) ) {
+		$cpic_bad_paths[] = str_replace( CPIC_PLUGIN_DIR, '', $path ) . ' => ' . $ns;
+	}
+}
+
+CPIC_Test::equal( array(), $cpic_bad_paths, 'Every src/ file matches its PSR-4 namespace' );
+
+// The 6.x shims are one class per file so themes can load them individually.
+foreach ( array( 'TemplateManagerAdapter', 'ImageGeneratorAdapter', 'FacebookAdapter', 'TelegramAdapter', 'SettingsAdapter' ) as $cpic_adapter ) {
+	$cpic_class = '\\CPIC\\Support\\Compat\\' . $cpic_adapter;
+	CPIC_Test::ok( class_exists( $cpic_class ), $cpic_adapter . ' is autoloadable' );
+}
+
+CPIC_Test::ok( class_exists( '\\CPIC\\Publishing\\PublishResult' ), 'PublishResult is autoloadable from its own directory' );
+
+// Legacy 6.x names must resolve through the bridge.
+foreach ( array( 'CPIC_Template_Manager', 'CPIC_Image_Generator', 'CPIC_Facebook_Poster', 'CPIC_Telegram_Poster', 'CPIC_Settings' ) as $cpic_legacy ) {
+	CPIC_Test::ok( class_exists( $cpic_legacy ), $cpic_legacy . ' legacy alias exists' );
+}
+
+/* ═══ 8e. Activation resilience ═════════════════════════════════ */
+
+CPIC_Test::suite( 'Core: activation resilience' );
+
+$activation_failures = array();
+
+foreach ( array( 'migrator', 'scheduler', 'capabilities', 'settings' ) as $cpic_needed ) {
+	if ( null === $plugin->service( $cpic_needed ) ) {
+		$activation_failures[] = $cpic_needed;
+	}
+}
+CPIC_Test::equal( array(), $activation_failures, 'Every service the activation hook uses resolves' );
+
+delete_option( 'cpic_activation_errors' );
+$GLOBALS['cpic_test_fail_rewrite_flush'] = true;
+
+try {
+	$plugin->on_activate();
+	CPIC_Test::ok( true, 'A failing activation step does not throw' );
+} catch ( \Throwable $e ) {
+	CPIC_Test::ok( false, 'A failing activation step does not throw', $e->getMessage() );
+}
+
+$recorded = get_option( 'cpic_activation_errors' );
+CPIC_Test::ok( is_array( $recorded ) && isset( $recorded['errors']['rewrites'] ), 'The failing step is recorded', $recorded );
+
+$GLOBALS['cpic_test_fail_rewrite_flush'] = false;
+$plugin->on_activate();
+CPIC_Test::ok( false === get_option( 'cpic_activation_errors' ), 'A clean activation clears the errors' );
+
 /* ═══ 13. Render signature / caching ════════════════════════════ */
 
 CPIC_Test::suite( 'Rendering: cache signatures' );

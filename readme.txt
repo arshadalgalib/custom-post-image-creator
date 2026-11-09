@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 7.0.0
+Stable tag: 7.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,14 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 
 == Changelog ==
 
+= 7.0.1 =
+* Fixed: activating the plugin could trigger a fatal error. `PublishResult` lived in `src/Publishing/Providers/` while declaring `namespace CPIC\Publishing`, so the autoloader could never find it; it now lives in `src/Publishing/`.
+* Fixed: the five 6.x compatibility shims (`CPIC_Template_Manager`, `CPIC_Image_Generator`, `CPIC_Facebook_Poster`, `CPIC_Telegram_Poster`, `CPIC_Settings`) were declared in one `Adapters.php` file, so none of them could be autoloaded. Each is now its own file with a shared `bootstrap.php`.
+* Fixed: activation no longer aborts on a single failed step. Each step is isolated and a failure is recorded and shown as an admin notice naming the step, the error and the PHP version.
+* Removed: the 6.x `includes/`, `js/` and `css/` directories and their templates no longer ship. They were unreachable dead code (one of them still shelled out to `exec( 'which python3' )`).
+* Fixed: plugin constants are guarded, so a duplicate load cannot emit "Constant already defined" warnings during activation.
+* Added: `tools/harness/verify.mjs` plus class-integrity and activation-simulation checks (312 assertions). `tools/build/package.sh` now refuses to build if a PHP file's namespace does not match its directory.
+
 = 7.0.0 =
 * Complete rewrite. New architecture (service container, repositories, REST API under `cpic/v1`), 16 database tables, and a migration path from 5.x/6.x data.
 * Design studio: canvas renderer driven by the server's render plan, layer list, inspector, drag-to-move, keyboard-accessible selection.
@@ -108,12 +116,15 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 * Diagnostics with a real repair action and credential-presence reporting.
 * Secrets are encrypted at rest and fail closed when the PHP build cannot encrypt.
 * Admin screens state what they cannot do (for example, background rendering of Bengali) instead of failing silently.
-* 282 automated PHP assertions run in CI without a PHP binary, plus a harness that renders every admin screen and a real design to PNG.
+* 312 automated PHP assertions run in CI without a PHP binary, plus a harness that renders every admin screen and a real design to PNG.
 
 = 6.x and earlier =
 See the previous readme for the 5.x/6.x history. Legacy classes (`CPIC_Template_Manager`, `CPIC_Image_Generator`, `CPIC_Facebook_Poster`, `CPIC_Telegram_Poster`, `CPIC_Settings`) remain loadable through compatibility adapters, and existing settings and credentials are imported once on upgrade.
 
 == Upgrade Notice ==
+
+= 7.0.1 =
+Fixes the activation fatal error. If 7.0.0 refused to activate, install 7.0.1 over it; no data changes are needed.
 
 = 7.0.0 =
 Major release with a new database schema and a new studio. Your existing templates, settings and single-account Facebook/Telegram credentials are imported automatically on the first admin page load. Automatic publishing stays off until you enable it.

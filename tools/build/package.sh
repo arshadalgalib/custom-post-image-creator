@@ -27,7 +27,7 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/$SLUG"
 
 # Copy the shipped surface only.
-for path in custom-post-image-creator.php uninstall.php readme.txt src templates resources fonts languages css js includes; do
+for path in custom-post-image-creator.php uninstall.php readme.txt src templates resources fonts languages; do
 	if [ -e "$ROOT/$path" ]; then
 		cp -R "$ROOT/$path" "$STAGE/$SLUG/"
 	fi
@@ -51,6 +51,27 @@ if [ -d "$STAGE/$SLUG/tests" ] || [ -d "$STAGE/$SLUG/tools" ]; then
 fi
 if find "$STAGE/$SLUG" -name '*.py' -print -quit | grep -q .; then
 	echo "python files leaked into the build" >&2
+	exit 1
+fi
+
+# Guard rail: every shipped PHP file must live in a directory the autoloader
+# can resolve. A file like `Providers/PublishResult.php` declaring
+# `namespace CPIC\Publishing` is invisible to PSR-4 and fatals at runtime.
+mismatch=0
+while read -r file; do
+	[ -z "$file" ] && continue
+	rel="${file#"$STAGE/$SLUG/src/"}"
+	dir="$(dirname "$rel")"
+	[ "$dir" = "." ] && continue
+	expect="CPIC\\$(printf '%s' "$dir" | tr '/' '\\')"
+	actual="$(grep -m1 -oE '^namespace[[:space:]]+[A-Za-z\\\\]+' "$file" | awk '{print $2}')"
+	if [ -n "$actual" ] && [ "$actual" != "$expect" ]; then
+		echo "namespace/path mismatch: src/$rel declares $actual, expected $expect" >&2
+		mismatch=$((mismatch + 1))
+	fi
+done < <(find "$STAGE/$SLUG/src" -name '*.php')
+if [ "$mismatch" -gt 0 ]; then
+	echo "$mismatch file(s) cannot be autoloaded" >&2
 	exit 1
 fi
 
