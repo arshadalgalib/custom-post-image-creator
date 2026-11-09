@@ -3,7 +3,7 @@
  * Plugin Name:       Custom Post Image Creator
  * Plugin URI:        https://github.com/arshadalgalib/custom-post-image-creator
  * Description:       Design studio, multilingual (Bengali-first) social image rendering, brand kits, templates, multi-account Facebook and Telegram publishing, delivery tracking, campaigns, calendar, analytics and automation for WordPress content.
- * Version:           7.0.3
+ * Version:           7.0.4
  * Author:            CPIC Dev Team
  * Author URI:        https://github.com/arshadalgalib/custom-post-image-creator
  * License:           GPL-2.0-or-later
@@ -29,7 +29,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * paths are the ones that should win.
  */
 if ( ! defined( 'CPIC_VERSION' ) ) {
-	define( 'CPIC_VERSION', '7.0.3' );
+	define( 'CPIC_VERSION', '7.0.4' );
 }
 if ( ! defined( 'CPIC_PLUGIN_FILE' ) ) {
 	define( 'CPIC_PLUGIN_FILE', __FILE__ );
@@ -44,7 +44,7 @@ if ( ! defined( 'CPIC_PLUGIN_BASENAME' ) ) {
 	define( 'CPIC_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 }
 if ( ! defined( 'CPIC_DB_VERSION' ) ) {
-	define( 'CPIC_DB_VERSION', '7.0.3' );
+	define( 'CPIC_DB_VERSION', '7.0.4' );
 }
 if ( ! defined( 'CPIC_REST_NAMESPACE' ) ) {
 	define( 'CPIC_REST_NAMESPACE', 'cpic/v1' );

@@ -167,12 +167,46 @@ if ( empty( $wpdb->last_error ) ) {
 	echo "  [FAIL] " . $wpdb->last_error . "\n";
 }
 
+$server = $wpdb->get_var( 'SELECT VERSION()' );
+$is_maria = is_string( $server ) && false !== stripos( $server, 'mariadb' );
+printf( "  %s %s version: %s\n", '', $is_maria ? 'MariaDB' : 'MySQL', $server ? $server : 'unknown' );
+
+// Five tables use two CURRENT_TIMESTAMP columns, which needs MySQL 5.6.5+.
+$modern = true;
+if ( is_string( $server ) && preg_match( '/(\d+)\.(\d+)\.(\d+)/', $server, $m ) ) {
+	$modern = version_compare( $m[1] . '.' . $m[2] . '.' . $m[3], '5.6.5', '>=' ) || $is_maria;
+}
+printf( "  %s CURRENT_TIMESTAMP support: %s\n", $modern ? '[ok]  ' : '[FAIL]', $modern ? 'yes' : 'NO - tables cannot be created' );
+
 $table = $wpdb->prefix . 'cpic_templates';
 $exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) === $table;
 
 echo $exists
 	? "  [ok]   {$table} exists (the plugin has been activated)\n"
 	: "  [info] {$table} does not exist yet (normal before activation)\n";
+
+$state = (string) get_option( 'cpic_installation_complete' );
+
+if ( 'yes' === $state ) {
+	echo "  [ok]   installation marked complete\n";
+} elseif ( 'partial' === $state ) {
+	echo "  [FAIL] activation was interrupted - tables or roles may be missing\n";
+	$pending = get_option( 'cpic_activation_pending' );
+	echo '         unfinished steps: ' . ( is_array( $pending ) ? implode( ', ', $pending ) : 'unknown' ) . "\n";
+	echo "         load any wp-admin page while the plugin is active and it will finish itself\n";
+} else {
+	echo "  [info] installation not recorded yet\n";
+}
+
+$stored = get_option( 'cpic_activation_errors' );
+
+if ( is_array( $stored ) && ! empty( $stored['errors'] ) ) {
+	echo "\nRecorded failures:\n";
+	foreach ( (array) $stored['errors'] as $step => $message ) {
+		$text = is_array( $message ) ? implode( ' ', $message ) : (string) $message;
+		echo "  [FAIL] {$step}: {$text}\n";
+	}
+}
 
 // ── Extensions that change behaviour ─────────────────────────────────
 echo "\nPHP extensions:\n";

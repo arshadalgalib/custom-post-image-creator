@@ -1,4 +1,4 @@
-# Custom Post Image Creator — 7.0.3
+# Custom Post Image Creator — 7.0.4
 
 Design social images for WordPress posts with correct Bengali typography, then publish them to Facebook Pages and Telegram channels with per-channel delivery tracking.
 

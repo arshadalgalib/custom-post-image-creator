@@ -371,9 +371,9 @@ final class Admin {
 
 		// ... plus anything that failed while loading on this very request, so a
 		// module that breaks only on some hosts is still visible.
-		$plugin = \CPIC\Core\Plugin::instance();
+		$plugin = \CPIC\Core\Plugin::loaded();
 
-		if ( method_exists( $plugin, 'load_failures' ) ) {
+		if ( $plugin && method_exists( $plugin, 'load_failures' ) ) {
 			foreach ( $plugin->load_failures() as $id => $failure ) {
 				if ( ! isset( $errors[ $id ] ) ) {
 					$errors[ $id ] = $failure;

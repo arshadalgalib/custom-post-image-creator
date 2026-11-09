@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 7.0.3
+Stable tag: 7.0.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,11 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 
 == Changelog ==
 
+= 7.0.4 =
+* Fixed: the failure notice could itself throw. It called `Plugin::instance()`, which builds the plugin if construction had failed, so the notice died in exactly the situation it was meant to report. It now uses `Plugin::loaded()`, which never builds anything.
+* Fixed: an activation request killed by a host time limit left the plugin half-installed - no tables, no capabilities - which surfaces as unrelated errors rather than an activation failure. Activation now records what it did not finish, and the remaining steps complete automatically on the next admin page load.
+* Added: `cpic-check.php` now reports the MySQL/MariaDB version, whether `CURRENT_TIMESTAMP` is supported, and whether a previous activation was interrupted.
+
 = 7.0.3 =
 * Fixed (root cause): the activation hook is now registered *before* any module boots. WordPress includes a plugin from inside an admin request, after `plugins_loaded` has already fired, so anything a module did at that moment could throw and take the activation hook down with it. That is the exact mechanism behind "could not be activated because it triggered a fatal error".
 * Added: if a module still fails to load, the failure is captured by module id and the plugin continues. `load_failures()` and `booted_cleanly()` report the state.
@@ -135,6 +140,9 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 See the previous readme for the 5.x/6.x history. Legacy classes (`CPIC_Template_Manager`, `CPIC_Image_Generator`, `CPIC_Facebook_Poster`, `CPIC_Telegram_Poster`, `CPIC_Settings`) remain loadable through compatibility adapters, and existing settings and credentials are imported once on upgrade.
 
 == Upgrade Notice ==
+
+= 7.0.4 =
+Hardens activation against hosts that kill the request part-way, and stops the failure notice throwing in the one situation it exists for.
 
 = 7.0.3 =
 Fixes the root cause of the activation fatal error: the activation hook is registered before modules load, and any module failure is captured instead of killing the request. Includes `cpic-check.php` for diagnosing stubborn installs.

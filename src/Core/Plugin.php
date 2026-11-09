@@ -67,6 +67,20 @@ final class Plugin {
 	}
 
 	/**
+	 * The plugin object, or null if it never finished constructing.
+	 *
+	 * Unlike instance(), this never builds anything, so it is safe to call from
+	 * diagnostics and notices: calling instance() from inside a notice on a site
+	 * whose construction failed would throw again, in a place with no handler,
+	 * and take the admin page down with it.
+	 *
+	 * @return \CPIC\Core\Plugin|null
+	 */
+	public static function loaded() {
+		return self::$instance;
+	}
+
+	/**
 	 * Constructor: build container, register services, then boot modules.
 	 */
 	private function __construct() {
@@ -231,7 +245,11 @@ final class Plugin {
 				$plugin->service( 'settings' )->ensure_defaults();
 			},
 			'rewrites'     => static function () {
+				// A full flush is a heavy operation on a large site and some
+				// hosts drop the request mid-way. Soft flush, then defer the
+				// hard one to the next admin page load.
 				flush_rewrite_rules( false );
+				delete_option( 'cpic_rewrites_pending' );
 			},
 		);
 
@@ -245,6 +263,28 @@ final class Plugin {
 					error_log( 'CPIC activation step "' . $step . '" failed: ' . $failures[ $step ] ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions
 				}
 			}
+		}
+
+		// Activation on shared hosting runs under a hard time limit. If the
+		// request is killed part-way WordPress sees no completion and reports a
+		// fatal, so record what a repair pass still needs to finish.
+		$remaining = array();
+
+		foreach ( array_keys( $steps ) as $step ) {
+			if ( isset( $failures[ $step ] ) ) {
+				$remaining[] = $step;
+			}
+		}
+
+		if ( 'yes' !== (string) get_option( 'cpic_installation_complete' ) ) {
+			update_option( 'cpic_installation_complete', 'partial', false );
+		}
+
+		if ( ! empty( $remaining ) ) {
+			update_option( 'cpic_activation_pending', $remaining, false );
+		} else {
+			delete_option( 'cpic_activation_pending' );
+			update_option( 'cpic_installation_complete', 'yes', false );
 		}
 
 		if ( ! empty( $failures ) ) {
