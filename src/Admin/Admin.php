@@ -258,6 +258,10 @@ final class Admin {
 			'timedOut'      => __( 'The server did not respond in time. Check your connection and try again.', 'custom-post-image-creator' ),
 			'badResponse'   => __( 'The server sent a response the editor could not read. Reload the page and try again.', 'custom-post-image-creator' ),
 			'renderFallback' => __( 'Some layers were drawn without their content. Check the highlighted layers before publishing.', 'custom-post-image-creator' ),
+			'noPlan'        => __( 'The design could not be prepared for export. Check your connection, then reload the page.', 'custom-post-image-creator' ),
+			'publishedStored' => __( 'Image saved — nothing was posted.', 'custom-post-image-creator' ),
+			'publishedWaiting' => __( 'Saved for publishing.', 'custom-post-image-creator' ),
+			'bindFailed'    => __( 'One part of the editor did not start. Reloading the page usually fixes it.', 'custom-post-image-creator' ),
 		);
 	}
 

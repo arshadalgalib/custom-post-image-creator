@@ -238,6 +238,9 @@ const planFor = (documentModel, format) => {
 	};
 };
 
+// What /publishing/publish should report next: 'ok', 'failed' or 'none'.
+let publishOutcome = 'ok';
+
 window.fetch = async (url, options = {}) => {
 	const target = String(url);
 	const method = options.method || 'GET';
@@ -250,7 +253,7 @@ window.fetch = async (url, options = {}) => {
 		return ok(planFor(body.document || {}, body.format || 'square'));
 	}
 
-	if (/\/templates\/\d+$/.test(target) && (method === 'PUT' || method === 'POST')) {
+	if (/\/templates(\/\d+)?$/.test(target) && (method === 'PUT' || method === 'POST')) {
 		const body = options.body ? JSON.parse(options.body) : {};
 		return ok({
 			id: 12,
@@ -264,17 +267,37 @@ window.fetch = async (url, options = {}) => {
 		});
 	}
 
-	if (/\/templates$/ && method === 'POST') {
-		const body = options.body ? JSON.parse(options.body) : {};
-		return ok({ id: 99, name: body.name || 'Untitled', revision: 1, document: body.document, config: {}, summary: {}, edit_url: '', tags: [] });
-	}
-
 	if (target.includes('/artifacts') && method === 'POST') {
 		return ok({ id: 77, url: 'https://example.test/render.png', width: 1080, height: 1080 });
 	}
 
 	if (target.includes('/publishing/publish')) {
-		return ok({ delivered: [{ provider: 'telegram', ok: true }] });
+		// Mirrors the real controller: 201 with a run and per-delivery results,
+		// which is *not* the same thing as "everything published".
+		const body = options.body ? JSON.parse(options.body) : {};
+		const ids = body.destination_ids || [];
+
+		if (publishOutcome === 'failed') {
+			return ok({
+				run_id: 5,
+				post_id: body.post_id,
+				deliveries: [{ delivery_id: 9, status: 'pending', destination_id: ids[0] || 1 }],
+				results: [{ delivery_id: 9, status: 'failed', provider: 'facebook', destination_id: ids[0] || 1, error_code: 'fb_invalid_token', error_message: 'The Facebook page token is no longer valid. Reconnect the account.' }],
+				waiting_render: false,
+			});
+		}
+
+		if (publishOutcome === 'none') {
+			return ok({ run_id: 6, post_id: body.post_id, deliveries: [], results: [], waiting_render: false });
+		}
+
+		return ok({
+			run_id: 4,
+			post_id: body.post_id,
+			deliveries: ids.map((id, index) => ({ delivery_id: 20 + index, status: 'published', destination_id: id })),
+			results: ids.map((id, index) => ({ delivery_id: 20 + index, status: 'published', provider: 'facebook', destination_id: id })),
+			waiting_render: false,
+		});
 	}
 
 	if (/\/versions$/.test(target)) {
@@ -304,6 +327,32 @@ const q = (selector) => document.querySelector(selector);
 const qa = (selector) => Array.from(document.querySelectorAll(selector));
 const studio = window.CPICStudio;
 const state = () => studio.state;
+
+// The fixture must offer a publishing destination, otherwise every publish
+// correctly reports "nothing was posted" and nothing else can be asserted.
+if (state() && state().meta) {
+	state().meta.destinations = [{ id: 3, label: 'Photocard', provider: 'facebook', status: 'connected' }];
+}
+
+/**
+ * The fixture's dialog footer only carries Cancel/Publish; the primary button
+ * the studio creates is a plain listener, so drive it through the DOM and fall
+ * back to text matching so the test states its intent.
+ *
+ * @param {RegExp} pattern Action label.
+ * @return {boolean} True when something was clicked.
+ */
+const clickDialogAction = (pattern) => {
+	const buttons = qa('#cpic-modal-foot button');
+	const target = buttons.find((button) => pattern.test((button.textContent || '').trim())) || buttons[buttons.length - 1];
+
+	if (!target) {
+		return false;
+	}
+
+	click(target);
+	return true;
+};
 
 const state_save = async () => {
 	click(q('#cpic-save'));
@@ -915,9 +964,148 @@ if (brandItem) {
 	}
 }
 
+console.log('\n▶ The rendering indicator');
+
+// A spinner that never clears reads as a broken renderer even when the design
+// painted perfectly — exactly what a stuck "Rendering…" looked like.
+const loading = q('#cpic-canvas-loading');
+
+// Switch formats: that path used to call requestPlan(false), which never
+// cleared the indicator it was not allowed to set.
+const storyFormat = qa('.cpic-format[data-format="story"], [data-format="story"]').pop();
+if (storyFormat) {
+	click(storyFormat);
+	await sleep(700);
+}
+
+check('the rendering indicator is cleared after a format switch', !loading || loading.hidden === true,
+	loading ? 'visible' : 'no indicator in the fixture');
+
+await studio.rerender(state().document, {});
+await sleep(300);
+check('the rendering indicator is cleared after a re-render', !loading || loading.hidden === true,
+	loading ? 'visible' : 'no indicator in the fixture');
+
+console.log('\n▶ The publish dialog');
+
+// Run this section against a quiet toast stack: the network-failure section
+// below asserts on *new* toasts, and a leftover publish message would be
+// attributed to the failure it never described.
+qa('#cpic-toasts .cpic-toast').forEach((node) => node.remove());
+
+await new Promise((resolve) => setTimeout(resolve, 60));
+
+const openPublish = async () => {
+	const publishButton = q('#cpic-publish');
+	if (!publishButton) {
+		return false;
+	}
+	click(publishButton);
+	await sleep(220);
+	return q('#cpic-modal').hidden === false;
+};
+
+const publishPrimary = () => Array.from(document.querySelectorAll('#cpic-modal-foot button')).pop();
+const modalText = () => (q('#cpic-modal-body') ? q('#cpic-modal-body').textContent : '');
+
+/**
+ * Run one publish and report every new toast it produced.
+ *
+ * @param {string} outcome What the stubbed endpoint should report.
+ * @return {Promise<string>} Toast text produced by this attempt.
+ */
+const runPublish = async (outcome) => {
+	publishOutcome = outcome;
+
+	if (q('#cpic-modal').hidden) {
+		await openPublish();
+	}
+
+	// The dialog captures destinations when it opens; anything else would
+	// publish to nobody and test a different branch.
+	if (!q('#cpic-modal').hidden) {
+		qa('#cpic-modal-body input[type="checkbox"]').forEach((box) => {
+			if (!box.checked) {
+				box.checked = true;
+				box.dispatchEvent(new window.Event('change', { bubbles: true }));
+			}
+		});
+	}
+
+	const seen = new Set(qa('#cpic-toasts .cpic-toast'));
+	const publishAction = qa('#cpic-modal-foot button').find((button) => /^Publish$/i.test((button.textContent || '').trim()));
+
+	if (!publishAction) {
+		return '';
+	}
+
+	publishAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+	await sleep(700);
+
+	const text = qa('#cpic-toasts .cpic-toast')
+		.filter((node) => !seen.has(node))
+		.map((node) => node.textContent || '')
+		.join(' | ');
+
+	if (q('#cpic-modal').hidden === false) {
+		const cancel = qa('#cpic-modal-foot button')[0];
+		if (cancel) {
+			click(cancel);
+			await sleep(120);
+		}
+	}
+
+	return text;
+};
+
+const opened = await openPublish();
+check('the publish button opens the dialog', opened, q('#cpic-modal').hidden ? 'dialog stayed hidden' : 'open');
+
+if (opened) {
+	check('the publish dialog offers a primary action', !!publishPrimary());
+
+	const afterOk = await runPublish('ok');
+	check('a successful publish says Published', /Published/i.test(afterOk), afterOk.slice(0, 90));
+	check('a successful publish reports no error', !/Rendering failed|TypeError|could not/i.test(afterOk), afterOk.slice(0, 90));
+
+	// The run is accepted even when the provider refuses the post. Promising
+	// "Published" there is exactly the misleading success we must not ship.
+	const afterFail = await runPublish('failed');
+	check('a refused publish shows the provider reason', /token|reconnect|invalid/i.test(afterFail), afterFail.slice(0, 120));
+	check('a refused publish never claims success', !/Published/.test(afterFail), afterFail.slice(0, 120));
+
+	// No destinations chosen: the image is stored, nothing is posted.
+	const afterNone = await runPublish('none');
+	check('publishing with no destination does not claim Published', !/Published/.test(afterNone), afterNone.slice(0, 120));
+	check('publishing with no destination says the image was saved', /saved/i.test(afterNone), afterNone.slice(0, 120));
+
+	publishOutcome = 'ok';
+
+	if (q('#cpic-modal').hidden === false) {
+		const cancel = qa('#cpic-modal-foot button')[0];
+		if (cancel) {
+			click(cancel);
+			await sleep(120);
+		}
+	}
+
+	check('the publish dialog closes', q('#cpic-modal').hidden === true);
+}
+
+qa('#cpic-toasts .cpic-toast').forEach((node) => node.remove());
+
 console.log('\n▶ Broken-network behaviour');
 
 const originalFetch = window.fetch;
+
+// Only what this section produces counts: earlier sections fill the toast
+// stack, and reading it whole would attribute their messages to this failure.
+// Toasts auto-dismiss, so "new since this point" cannot be judged by element
+// identity or by message text (the same failure can repeat). Count elements
+// instead: nothing above may remove them synchronously.
+const toastCountBeforeOutage = qa('#cpic-toasts .cpic-toast').length;
+const newToasts = () => qa('#cpic-toasts .cpic-toast').slice(toastCountBeforeOutage).map((node) => node.textContent || '');
+
 window.fetch = async () => {
 	throw new Error('network down');
 };
@@ -930,7 +1118,7 @@ check('the studio still holds the last good plan', !!state().plan);
 
 // A dead server must produce a message a user can act on, not a raw
 // "TypeError: Failed to fetch".
-const toastText = qa('#cpic-toasts .cpic-toast').map((node) => node.textContent || '').join(' ');
+const toastText = newToasts().join(' ');
 check('the failure message is written for a human', /could not be reached|connection|network|offline|respond/i.test(toastText),
 	toastText.slice(0, 120));
 check('the failure message never leaks a raw exception', !/TypeError|undefined|\[object/i.test(toastText), toastText.slice(0, 120));
@@ -952,17 +1140,17 @@ const startedAt = Date.now();
 await studio.rerender(state().document, {});
 await sleep(150);
 check('a stalled request aborts instead of hanging', aborted > 0, String(aborted) + ' abort(s) in ' + (Date.now() - startedAt) + 'ms');
-const stallText = qa('#cpic-toasts .cpic-toast').map((node) => node.textContent || '').join(' ');
+const stallText = newToasts().join(' ');
 check('a timeout is reported in plain language', /did not respond in time|connection/i.test(stallText), stallText.slice(0, 120));
 
 // A 200 carrying an unreadable body is a failure, not a success.
 window.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error('not json'); } });
-const beforeBadPayload = qa('#cpic-toasts .cpic-toast').length;
 await studio.rerender(state().document, {});
 await sleep(150);
+const badPayloadText = newToasts().join(' ');
 check('an unreadable 200 shows an error rather than pretending to succeed',
-	qa('#cpic-toasts .cpic-toast').length > beforeBadPayload || /could not read|reload/i.test(qa('#cpic-toasts .cpic-toast').map((n) => n.textContent).join(' ')),
-	String(qa('#cpic-toasts .cpic-toast').length - beforeBadPayload) + ' new toast(s)');
+	/could not read|reload/i.test(badPayloadText),
+	badPayloadText.slice(0, 120) || 'no new toast');
 
 window.fetch = originalFetch;
 

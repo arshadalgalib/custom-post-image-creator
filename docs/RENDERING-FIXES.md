@@ -175,6 +175,71 @@ once the assets grow.
 which batch failed. This is why the suite keeps working as fonts/images are
 added.
 
+## Second pass: the publish dialog and "Rendering failed"
+
+A screenshot from a real site showed the Publish dialog reporting
+**"Rendering failed"** while the canvas painted the design perfectly and the
+status line stayed on "Rendering…". Both symptoms had the same root cause class:
+errors that were never the user's problem were being reported as one, and one
+real error was hidden behind another.
+
+### 12. The dialog's failure text was a masked `TypeError`
+
+`event.currentTarget` is `null` once a click handler yields at its first
+`await`. The publish action read it inside `finally`, threw a `TypeError`, and
+that exception replaced the real message. The button reference is now captured
+synchronously (with a DOM fallback), so `finally` cannot throw.
+
+### 13. Publish claimed success that never happened
+
+Publishing answers `201` as soon as a *run* is queued — the provider may still
+refuse the post. The studio read that as "Published". It now reads the run's
+per-delivery `results`:
+
+| Endpoint said | Studio says |
+| --- | --- |
+| `results[].status = failed` | the provider's own reason (e.g. reconnect the page token) |
+| no destinations selected | "Image saved — nothing was posted." |
+| queued, waiting for the browser render | "Saved for publishing." |
+| all published | "Published — N destination(s)" |
+
+`studio-smoke` drives all four cases against a stubbed endpoint.
+
+### 14. A stuck "Rendering…" spinner
+
+Switching format, creating a design and exporting all call `requestPlan(false)`.
+That path set no indicator (correct) but also never cleared one — so a single
+earlier visible request left "Rendering…" on screen permanently. The indicator
+is now owned and cleared by every visible request, unconditionally.
+
+### 15. A dead server was silent
+
+`rerender()` and the boot request used the quiet path, so a failing plan request
+produced no toast at all: the canvas simply kept its last content. Quiet now
+means "no spinner", not "no errors" — boot, public re-render and export report
+failures.
+
+### 16. "Rendering failed" for something that was never a render
+
+Export threw the renderer's error when it had no plan. It now says what actually
+happened and what to do ("check your connection, then reload").
+
+### 17. A fresh checkout could not run one gate
+
+`render-canvas.mjs` wrote into `tools/harness/out/`, which is gitignored, without
+creating it — so the gate failed with `ENOENT` on a clean clone. It now creates
+the directory.
+
+### A studio → server round trip is now a gate
+
+Each REST call was covered in isolation, so a mismatch between them only showed
+up on a real site. `run-core.php` now drives the three controllers in the exact
+order and with the exact payloads the studio uses — `/render/plan` →
+`/artifacts` → `/publishing/publish` — including the duplicate-publish refusal.
+Finding it surfaced two gaps in the test fixture itself (a destination with no
+encrypted credentials, and a prefix collision that answered the publish POST with
+a template response), which is the sort of thing only an end-to-end call catches.
+
 ## Verification
 
 ```
@@ -182,8 +247,8 @@ cd tools/harness && node verify.mjs
 ```
 
 ```
-PHP test suite                     325 assertions, 0 failures
-Studio smoke (editor JS)           106 checks, 0 failures
+PHP test suite                     339 assertions, 0 failures
+Studio smoke (editor JS)           117 checks, 0 failures
 Studio paint (editor canvas)       STUDIO PAINT PASSED
 Render doctor (every starter)      26 plans, 0 faults
                                    RENDER DOCTOR PASSED

@@ -1202,6 +1202,176 @@ CPIC_Test::equal( 201, (int) $data_response->get_status(), 'PNG posted as `data`
 $empty_response = $artifacts_controller->store( new WP_REST_Request( array() ) );
 CPIC_Test::ok( (int) $empty_response->get_status() >= 400, 'An empty render is rejected' );
 
+/* ═══ 25b. Studio round trip: plan → artifact → publish ═════ */
+
+/*
+ * The studio is a browser client: it asks for a plan, paints it locally,
+ * posts the PNG, then publishes. Each step was covered in isolation, so a
+ * mismatch between them (a field the client sends, a body the server expects)
+ * only showed up on a real site. This drives the three controllers exactly as
+ * the studio calls them, in order, with the same payloads.
+ */
+
+CPIC_Test::suite( 'Studio round trip: plan, artifact, publish' );
+
+$studio_document = $created['document'];
+
+// The studio posts `{ document, format, post_id, brand_id }` to /render/plan.
+$plan_request = new WP_REST_Request(
+	array(
+		'document' => $studio_document,
+		'format'   => 'square',
+		'post_id'  => $post_id,
+		'brand_id' => 0,
+	)
+);
+$plan_response = new \CPIC\REST\Controllers\RenderController( $plugin->container() );
+$plan_payload  = $plan_response->plan( $plan_request );
+$plan_body     = method_exists( $plan_payload, 'get_data' ) ? $plan_payload->get_data() : array();
+$plan_data     = isset( $plan_body['data'] ) ? $plan_body['data'] : $plan_body;
+
+CPIC_Test::equal( 200, (int) $plan_payload->get_status(), 'The studio can fetch a render plan with its exact payload' );
+CPIC_Test::ok( ! empty( $plan_data['layers'] ), 'The plan carries layers to paint', is_array( $plan_data ) ? count( (array) $plan_data ) : 'no data' );
+CPIC_Test::equal( 'square', isset( $plan_data['format'] ) ? $plan_data['format'] : '', 'The plan echoes the requested format' );
+CPIC_Test::ok( isset( $plan_data['width'], $plan_data['height'] ) && $plan_data['width'] > 0, 'The plan carries the canvas size' );
+
+// The studio posts `{ post_id, template_id, format, document, binary }`.
+$artifact_request = new WP_REST_Request(
+	array(
+		'post_id'     => $post_id,
+		'template_id' => (int) $created['id'],
+		'format'      => 'square',
+		'document'    => $studio_document,
+		'binary'      => 'data:image/png;base64,' . base64_encode( cpic_test_png( 1080, 1080 ) ),
+	)
+);
+$artifact_response = $artifacts_controller->store( $artifact_request );
+$artifact_body     = method_exists( $artifact_response, 'get_data' ) ? $artifact_response->get_data() : array();
+
+CPIC_Test::equal( 201, (int) $artifact_response->get_status(), 'A 1080×1080 studio render is accepted' );
+CPIC_Test::ok( ! empty( $artifact_body['exists'] ), 'The stored artifact reports as on disk' );
+CPIC_Test::ok( ! empty( $artifact_body['file_url'] ), 'The stored artifact exposes a URL for publishing' );
+
+// Publishing the artifact the studio just stored must not re-render.
+// Connect it through the real API so credentials are encrypted the way the
+// publish path expects them; a raw row would have no usable page token.
+$destination = $plugin->service( 'accounts' )->create(
+	array(
+		'provider'    => 'facebook',
+		'label'       => 'Test page',
+		'account_id'  => 'page-cpic-round-trip',
+		'account_name' => 'Test page',
+		'status'      => 'connected',
+		'credentials' => array(
+			// Facebook page tokens are long; the manager rejects short ones.
+			'page_token' => 'EAAG' . str_repeat( 'testtoken', 4 ),
+			'app_id'     => '123',
+			'app_secret' => 'secret',
+		),
+	)
+);
+
+if ( is_wp_error( $destination ) ) {
+	// Fall back to a direct row so the rest of the round trip still runs.
+	$destination = $plugin->service( 'accounts' )->repo()->insert(
+		array(
+			'public_id'  => 'dest-test-1',
+			'provider'   => 'facebook',
+			'label'      => 'Test page',
+			'account_id' => 'page-cpic-round-trip',
+			'status'     => 'connected',
+			'priority'   => 1,
+			'created_at' => current_time( 'mysql' ),
+			'updated_at' => current_time( 'mysql' ),
+		)
+	);
+} else {
+	$destination = (int) $destination['id'];
+}
+
+$targets = $plugin->service( 'accounts' )->resolve_targets( array( 'destination_ids' => array( $destination ) ) );
+
+CPIC_Test::ok(
+	$destination > 0 && ! empty( $targets ),
+	'A connected destination exists for the publish step',
+	'id ' . $destination . ', ' . count( (array) $targets ) . ' target(s)'
+);
+
+// The publish pipeline calls the provider over HTTP; answer every request.
+$published_posts = array();
+$published_http  = function ( $response, $url ) use ( &$published_posts ) {
+	$published_posts[] = (string) $url;
+
+	return array(
+		'response' => array( 'code' => 200 ),
+		'body'     => wp_json_encode( array( 'id' => 'fb-post-1', 'post_id' => 'fb-post-1' ) ),
+		'headers'  => array(),
+	);
+};
+add_filter( 'cpic_test_http_response', $published_http, 10, 2 );
+
+$publishing_controller = new \CPIC\REST\Controllers\PublishingController( $plugin->container() );
+$publish_request       = new WP_REST_Request(
+	array(
+		'post_id'         => $post_id,
+		'format'          => 'square',
+		'destination_ids' => array( $destination ),
+		'artifact_id'     => (int) $artifact_body['id'],
+		'overrides'       => array(),
+	)
+);
+$publish_response = $publishing_controller->publish( $publish_request );
+$publish_body     = method_exists( $publish_response, 'get_data' ) ? $publish_response->get_data() : array();
+$publish_status   = (int) $publish_response->get_status();
+
+CPIC_Test::ok(
+	in_array( $publish_status, array( 201, 202 ), true ),
+	'Publishing the stored artifact is accepted',
+	'status ' . $publish_status . ' ' . wp_json_encode( $publish_body )
+);
+
+$publish_data = isset( $publish_body['data'] ) ? $publish_body['data'] : $publish_body;
+CPIC_Test::ok( ! empty( $publish_data['deliveries'] ), 'Publishing reports the deliveries it queued', is_array( $publish_data ) ? implode( ',', array_keys( $publish_data ) ) : 'none' );
+
+$queued_status = isset( $publish_data['deliveries'][0]['status'] ) ? (string) $publish_data['deliveries'][0]['status'] : '';
+CPIC_Test::ok( '' !== $queued_status, 'Each delivery carries a status', $queued_status );
+CPIC_Test::ok( ! in_array( $queued_status, array( 'failed', 'error' ), true ), 'The delivery was not rejected', $queued_status );
+
+/*
+ * Once the provider confirms, the post is published. A second manual publish
+ * must then be refused rather than duplicate the post on the page. The first
+ * publish only *queues* the delivery, so mark it confirmed the way the worker
+ * would, then ask again.
+ */
+if ( ! empty( $publish_data['deliveries'][0]['delivery_id'] ) ) {
+	$delivery_id = (int) $publish_data['deliveries'][0]['delivery_id'];
+	$updated     = $plugin->service( 'deliveries' )->update(
+		$delivery_id,
+		array(
+			'status'     => 'published',
+			'updated_at' => current_time( 'mysql' ),
+		)
+	);
+	$row_now     = $plugin->service( 'deliveries' )->find( $delivery_id );
+
+	CPIC_Test::ok(
+		$updated && isset( $row_now['status'] ) && 'published' === $row_now['status'],
+		'The delivery can be marked published',
+		wp_json_encode( $row_now ? array( 'status' => $row_now['status'], 'destination_id' => $row_now['destination_id'] ) : null )
+	);
+}
+
+$repeat_response = $publishing_controller->publish( $publish_request );
+$repeat_status   = (int) $repeat_response->get_status();
+$repeat_body     = method_exists( $repeat_response, 'get_data' ) ? $repeat_response->get_data() : array();
+
+CPIC_Test::equal( 409, $repeat_status, 'Publishing the same post twice is refused' );
+CPIC_Test::equal(
+	'cpic_already_published',
+	isset( $repeat_body['code'] ) ? (string) $repeat_body['code'] : '',
+	'A duplicate publish explains itself'
+);
+
 /* ═══ 26. Campaigns + calendar ═══════════════════════════════ */
 
 CPIC_Test::suite( 'Campaigns and calendar' );

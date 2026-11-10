@@ -28,7 +28,7 @@ would have been rejected by the artifacts endpoint.
 | `templates/admin/studio.php` | 587 | App shell + boot payload |
 | `resources/js/studio.js` | 9 200 | The whole editor (vanilla JS, one IIFE, `window.CPICStudio` preserved) |
 | `resources/css/studio.css` | 2 782 | All styles, scoped under `.cpic-studio`, no CDN, no emoji, inline SVG only |
-| `tools/harness/studio-smoke.mjs` | 977 | **New gate**: drives the real editor script in a DOM (106 checks) |
+| `tools/harness/studio-smoke.mjs` | 1 165 | **New gate**: drives the real editor script in a DOM (117 checks) |
 | `tools/harness/render-doctor.mjs` | 470 | **New gate**: paints every starter in every format and measures the result |
 | `tools/harness/studio-paint.mjs` | 268 | **New gate**: paints real plans through the studio's painter, inspects pixels |
 | `src/REST/Controllers/ArtifactsController.php` | +6 | Accepts `binary` as well as `data` |
@@ -143,7 +143,7 @@ cd tools/harness && node verify.mjs
 | PHP suite | **321 passed / 0 failed** (includes the 4 new artifact-payload assertions) |
 | Admin screens (11) | all render, no diagnostics leaked |
 | Canvas render | `out/plan-preview.png` |
-| **Studio smoke** | **106 checks passed** |
+| **Studio smoke** | **117 checks passed** |
 | **Studio paint** | square + story painted, non-blank, opaque |
 
 `studio-smoke.mjs` boots the *real* `studio.js` against the *real* rendered markup (jsdom,

@@ -7184,7 +7184,17 @@
 		return doc;
 	}
 
-	async function requestPlan( silent ) {
+	/**
+	 * Ask the server for a render plan and paint it.
+	 *
+	 * @param {boolean} silent      Show no indicator.
+	 * @param {Object}  [options]   { reportErrors } — report failures the user
+	 *                              should see even on a quiet request.
+	 * @return {Promise<Object|null>} Plan.
+	 */
+	async function requestPlan( silent, options ) {
+		options = options || {};
+
 		if ( ! state.document ) {
 			return null;
 		}
@@ -7192,7 +7202,11 @@
 		var seq = ++state.planSeq;
 		state.planPending = seq;
 
-		if ( ! silent ) {
+		// Every visible request owns the indicator while it waits, and always
+		// clears it in `finally`. A spinner that never goes away reads as a
+		// broken renderer even when the design painted perfectly.
+		var visible = ! silent;
+		if ( visible ) {
 			showCanvasLoading( true );
 		}
 
@@ -7229,12 +7243,19 @@
 
 			return plan;
 		} catch ( error ) {
-			if ( seq === state.planSeq ) {
+			// A background repaint may fail quietly, but a re-render the user
+			// asked for must never fail silently: that is how a dead server
+			// looked like a working editor.
+			var shouldReport = options.reportErrors || ! silent;
+
+			if ( seq === state.planSeq && shouldReport ) {
 				toast( error.message || str( 'renderFailed', 'Rendering failed' ), 'error' );
 			}
 			return state.plan;
 		} finally {
-			if ( seq === state.planSeq ) {
+			// Clear it unconditionally: a superseded request must not leave the
+			// indicator on screen on behalf of the one that replaced it.
+			if ( visible ) {
 				showCanvasLoading( false );
 			}
 		}
@@ -7408,11 +7429,13 @@
 		var plan = state.plan;
 
 		if ( ! plan ) {
-			plan = await requestPlan( false );
+			plan = await requestPlan( true, { reportErrors: true } );
 		}
 
 		if ( ! plan ) {
-			throw new Error( str( 'renderFailed', 'Rendering failed' ) );
+			// Say what actually happened: the editor never received a plan, so
+			// "Rendering failed" (which sounds like a broken renderer) is wrong.
+			throw new Error( str( 'noPlan', 'The design could not be prepared for export. Check your connection, then reload the page.' ) );
 		}
 
 		await ensureFonts( plan.fonts );
@@ -7684,7 +7707,11 @@
 					primary: true,
 					keepOpen: true,
 					run: async function ( event ) {
-						var button = event && event.currentTarget;
+						// `event.currentTarget` is nulled as soon as the handler
+						// yields, so capture the button *now*: reading it after an
+						// await used to throw inside `finally` and replace the real
+						// error message with a TypeError.
+						var button = ( event && event.currentTarget ) || els.modalFoot.querySelector( '.cpic-btn--primary' );
 						if ( button ) {
 							button.disabled = true;
 						}
@@ -7711,15 +7738,56 @@
 							} );
 
 							var result = payload && payload.data ? payload.data : payload;
+
+							// The run is accepted even when the provider refuses it,
+							// so "Published" must be earned: read the per-delivery
+							// outcomes before promising anything.
+							var outcomes = ( result && result.results ) || [];
+							var failed = outcomes.filter( function ( row ) {
+								return row && ( row.status === 'failed' || row.status === 'not_claimed' );
+							} );
+							var waiting = ( result && ( result.waiting_render || result.render_error ) ) || outcomes.some( function ( row ) {
+								return row && row.status === 'waiting_for_artifact';
+							} );
+
 							clear( progress );
-							progress.appendChild( iconNode( 'check', 16 ) );
+
+							if ( failed.length ) {
+								var reason = failed[ 0 ].error_message || str( 'publishFailed', 'Publishing failed' );
+								progress.appendChild( iconNode( 'warning', 16 ) );
+								progress.appendChild( el( 'span', { text: reason } ) );
+								toast( reason, 'error', { duration: 9000 } );
+								state.lastPublishFailed = true;
+								return;
+							}
+
+							if ( outcomes.length ) {
+								progress.appendChild( iconNode( 'check', 16 ) );
+								progress.appendChild(
+									el( 'span', {
+										text: str( 'published', 'Published' ) + ' — ' + outcomes.length + ' ' + str( 'destinations', 'destination(s)' ),
+									} )
+								);
+								toast( str( 'published', 'Published' ), 'success' );
+								showResult( artifact, stored.png );
+								return;
+							}
+
+							// No destinations were chosen: the image is stored and
+							// scheduled, but nothing was posted. Saying "Published"
+							// here is exactly the misleading success we must avoid.
+							progress.appendChild( iconNode( 'warning', 16 ) );
 							progress.appendChild(
 								el( 'span', {
-									text: str( 'published', 'Published' ) + ( result && result.deliveries ? ' — ' + result.deliveries.length + ' ' + str( 'destinations', 'destination(s) queued' ) : '' ),
+									text: waiting
+										? str( 'publishedWaiting', 'Saved for publishing — the image will be sent when it is ready.' )
+										: str( 'publishedStored', 'Image saved. Choose a destination to publish it now.' ),
 								} )
 							);
-							toast( str( 'published', 'Published' ), 'success' );
-							showResult( artifact, stored.png );
+							toast(
+								waiting ? str( 'publishedWaiting', 'Saved for publishing.') : str( 'publishedStored', 'Image saved — nothing was posted.' ),
+								'warning'
+							);
 						} catch ( error ) {
 							clear( progress );
 							progress.appendChild( iconNode( 'warning', 16 ) );
@@ -7982,7 +8050,9 @@
 		syncFormatButtons();
 		refreshSaveState();
 
-		await requestPlan( true );
+		// The first plan of a session is user-visible: a blank canvas with no
+		// explanation is the worst failure mode there is.
+		await requestPlan( true, { reportErrors: true } );
 		renderAll();
 		fitToScreen();
 		toast( str( 'starterLoaded', 'Starter loaded — save it to keep it.' ), 'success' );
@@ -9155,7 +9225,7 @@
 		var plan = await requestPlan( true );
 
 		if ( ! plan ) {
-			throw new Error( str( 'renderFailed', 'Rendering failed' ) );
+			throw new Error( str( 'noPlan', 'The design could not be prepared for export. Check your connection, then reload the page.' ) );
 		}
 
 		var target = document.createElement( 'canvas' );
@@ -9186,7 +9256,7 @@
 			}
 			state.format = options.format || state.format;
 			state.postId = options.postId !== undefined ? options.postId : state.postId;
-			return requestPlan( true ).then( function () {
+			return requestPlan( true, { reportErrors: true } ).then( function () {
 				renderAll();
 				return state.plan;
 			} );

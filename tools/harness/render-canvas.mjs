@@ -8,7 +8,8 @@
  * Usage: node tools/harness/render-canvas.mjs [outFile]
  */
 
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCanvas, GlobalFonts } from '@napi-rs/canvas';
@@ -151,6 +152,8 @@ for (const layer of layers) {
 	ctx.restore();
 }
 
+// `out/` is gitignored, so a fresh checkout has no directory to write into.
+mkdirSync(dirname(outFile), { recursive: true });
 writeFileSync(outFile, canvas.toBuffer('image/png'));
 
 // Terminal proof that the plan itself is sane.
