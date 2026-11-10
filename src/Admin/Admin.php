@@ -60,6 +60,14 @@ final class Admin {
 		add_action( 'admin_post_cpic_brand_default', array( $this, 'handle_brand_default' ) );
 		add_action( 'admin_post_cpic_save_account', array( $this, 'handle_save_account' ) );
 		add_action( 'admin_post_cpic_account_status', array( $this, 'handle_account_status' ) );
+		add_action( 'admin_post_cpic_facebook_oauth', array( $this, 'handle_facebook_oauth' ) );
+		add_action( 'admin_post_cpic_facebook_connect_pages', array( $this, 'handle_facebook_connect_pages' ) );
+		// Facebook OAuth popup lands on this URL without a user nonce; state transient is the CSRF token.
+		add_action( 'admin_post_nopriv_cpic_facebook_oauth', array( $this, 'handle_facebook_oauth' ) );
+		add_action( 'admin_post_cpic_save_facebook_creds', array( $this, 'handle_save_facebook_creds' ) );
+		add_action( 'admin_post_cpic_save_telegram', array( $this, 'handle_save_telegram' ) );
+		add_action( 'admin_post_cpic_test_telegram', array( $this, 'handle_test_telegram' ) );
+		add_action( 'admin_post_cpic_disconnect_facebook', array( $this, 'handle_disconnect_facebook' ) );
 		add_action( 'admin_post_cpic_save_campaign', array( $this, 'handle_save_campaign' ) );
 		add_action( 'admin_post_cpic_campaign_status', array( $this, 'handle_campaign_status' ) );
 		add_action( 'admin_post_cpic_save_settings', array( $this, 'handle_save_settings' ) );
@@ -165,6 +173,39 @@ final class Admin {
 				$version,
 				true
 			);
+		}
+
+		// Facebook OAuth helper on Social Accounts (popup + page picker).
+		if ( $is_plugin_screen ) {
+			$screen_id = $screen ? (string) $screen->id : '';
+			if ( false !== strpos( $screen_id, 'cpic-accounts' ) || false !== strpos( (string) $hook, 'cpic-accounts' ) ) {
+				wp_enqueue_script(
+					'cpic-accounts',
+					CPIC_PLUGIN_URL . 'resources/js/admin-accounts.js',
+					array( 'wp-api-fetch' ),
+					$version,
+					true
+				);
+				wp_localize_script(
+					'cpic-accounts',
+					'CPICAccounts',
+					array(
+						'restRoot'      => esc_url_raw( rest_url() ),
+						'nonce'         => wp_create_nonce( 'wp_rest' ),
+						'canManage'     => $this->container->get( 'capabilities' )->can( 'cpic_manage_accounts' ),
+						'fbConfigured'  => $this->container->get( 'facebook_oauth' )->is_configured(),
+						'fbSetupUrl'    => admin_url( 'admin.php?page=cpic-settings' ),
+						'redirectUri'   => $this->container->get( 'facebook_oauth' )->redirect_uri(),
+						'i18n'          => array(
+							'connecting'    => __( 'Contacting Facebook…', 'custom-post-image-creator' ),
+							'popupBlocked'  => __( 'Your browser blocked the popup. Allow popups for this site and try again.', 'custom-post-image-creator' ),
+							'notConfigured' => $this->container->get( 'facebook_oauth' )->configuration_error(),
+							'failed'        => __( 'Facebook authorization failed.', 'custom-post-image-creator' ),
+							'connectFb'     => __( 'Connect with Facebook', 'custom-post-image-creator' ),
+						),
+					)
+				);
+			}
 		}
 
 		$post_id = isset( $_GET['post'] ) ? (int) $_GET['post'] : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
@@ -976,5 +1017,344 @@ final class Admin {
 		}
 
 		$this->back_to( 'cpic-diagnostics', 'repaired' );
+	}
+
+	/**
+	 * Facebook OAuth: handle redirect from Facebook (popup).
+	 *
+	 * This is intentionally not nonce-checked via check_admin_referer; the
+	 * `state` param is the CSRF token (stored as a transient). We still gate
+	 * writes behind the transient's user but render all output safely.
+	 *
+	 * @return void
+	 */
+	public function handle_facebook_oauth() {
+		$code  = isset( $_GET['code'] ) ? sanitize_text_field( wp_unslash( (string) $_GET['code'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$state = isset( $_GET['state'] ) ? sanitize_text_field( wp_unslash( (string) $_GET['state'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$error = isset( $_GET['error'] ) ? sanitize_text_field( wp_unslash( (string) $_GET['error'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$error_description = isset( $_GET['error_description'] ) ? sanitize_text_field( wp_unslash( (string) $_GET['error_description'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+
+		if ( '' !== $error ) {
+			$this->render_oauth_error( $error_description ? $error_description : $error );
+			return;
+		}
+
+		if ( '' === $code || '' === $state ) {
+			$this->render_oauth_error( __( 'Facebook did not return an authorization code. Please try again.', 'custom-post-image-creator' ) );
+			return;
+		}
+
+		$oauth = $this->container->get( 'facebook_oauth' );
+		$picker_token = $oauth->handle_callback( $code, $state );
+
+		if ( is_wp_error( $picker_token ) ) {
+			$this->render_oauth_error( $picker_token->get_error_message() );
+			return;
+		}
+
+		$this->render_oauth_picker( $picker_token );
+	}
+
+	/**
+	 * Facebook OAuth: persist selected pages from the picker.
+	 *
+	 * @return void
+	 */
+	public function handle_facebook_connect_pages() {
+		$picker_token = isset( $_POST['picker_token'] ) ? sanitize_text_field( wp_unslash( (string) $_POST['picker_token'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		if ( '' === $picker_token ) {
+			$this->render_oauth_error( __( 'Missing session token. Close this window and start again.', 'custom-post-image-creator' ) );
+			return;
+		}
+
+		if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( (string) $_POST['_wpnonce'] ) ), 'cpic_fb_connect_' . $picker_token ) ) {
+			$this->render_oauth_error( __( 'Session expired. Close this window and start again.', 'custom-post-image-creator' ) );
+			return;
+		}
+
+		$raw = isset( $_POST['page_ids'] ) ? wp_unslash( $_POST['page_ids'] ) : array(); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$page_ids = is_array( $raw ) ? array_map( 'sanitize_text_field', $raw ) : array( sanitize_text_field( (string) $raw ) );
+
+		$result = $this->container->get( 'facebook_oauth' )->connect_pages( $picker_token, $page_ids );
+
+		if ( is_wp_error( $result ) ) {
+			$this->render_oauth_error( $result->get_error_message(), $picker_token );
+			return;
+		}
+
+		$this->render_oauth_success( count( $result ) );
+	}
+
+	/**
+	 * Render an OAuth error inside the popup.
+	 *
+	 * @param string $message      Error message.
+	 * @param string $picker_token Optional picker token to re-show form.
+	 * @return void
+	 */
+	private function render_oauth_error( $message, $picker_token = '' ) {
+		$retry_url = admin_url( 'admin.php?page=cpic-accounts' );
+		?>
+		<!doctype html>
+		<html <?php language_attributes(); ?>>
+		<head>
+			<meta charset="<?php bloginfo( 'charset' ); ?>">
+			<meta name="viewport" content="width=device-width">
+			<title><?php esc_html_e( 'Facebook connection', 'custom-post-image-creator' ); ?></title>
+			<style>
+				body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:24px;color:#1d2327}
+				.cpic-oauth__card{max-width:520px;margin:40px auto;border:1px solid #dcdcde;border-radius:8px;padding:24px;background:#fff}
+				.cpic-oauth__error{color:#b32d2e}
+				.button{margin-top:16px}
+			</style>
+		</head>
+		<body>
+			<div class="cpic-oauth__card">
+				<h2><?php esc_html_e( 'Facebook connection failed', 'custom-post-image-creator' ); ?></h2>
+				<p class="cpic-oauth__error"><?php echo esc_html( $message ); ?></p>
+				<p class="cpic-muted"><?php esc_html_e( 'You can close this window and try again. Your Facebook App redirect URI must exactly match the one shown in Social Accounts.', 'custom-post-image-creator' ); ?></p>
+				<?php if ( '' !== $picker_token ) : ?>
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php?action=cpic_facebook_connect_pages' ) ); ?>">
+						<?php wp_nonce_field( 'cpic_fb_connect_' . $picker_token ); ?>
+						<input type="hidden" name="picker_token" value="<?php echo esc_attr( $picker_token ); ?>">
+						<p><a href="#" onclick="history.back();return false;" class="button"><?php esc_html_e( 'Go back', 'custom-post-image-creator' ); ?></a></p>
+					</form>
+				<?php else : ?>
+					<p><button type="button" class="button" onclick="window.close()"><?php esc_html_e( 'Close window', 'custom-post-image-creator' ); ?></button></p>
+				<?php endif; ?>
+			</div>
+		</body>
+		</html>
+		<?php
+		exit;
+	}
+
+	/**
+	 * Render the page picker inside the popup.
+	 *
+	 * @param string $picker_token Picker token.
+	 * @return void
+	 */
+	private function render_oauth_picker( $picker_token ) {
+		$oauth   = $this->container->get( 'facebook_oauth' );
+		$payload = $oauth->get_picker_payload( $picker_token );
+
+		if ( is_wp_error( $payload ) ) {
+			$this->render_oauth_error( $payload->get_error_message() );
+			return;
+		}
+
+		$pages = (array) $payload['pages'];
+		?>
+		<!doctype html>
+		<html <?php language_attributes(); ?>>
+		<head>
+			<meta charset="<?php bloginfo( 'charset' ); ?>">
+			<meta name="viewport" content="width=device-width">
+			<title><?php esc_html_e( 'Choose Facebook Pages', 'custom-post-image-creator' ); ?></title>
+			<style>
+				body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:16px;color:#1d2327;background:#f0f0f1}
+				.cpic-oauth__card{max-width:560px;margin:20px auto;background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:20px}
+				.cpic-oauth__page{display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #f0f0f1}
+				.cpic-oauth__page img{width:36px;height:36px;border-radius:50%;object-fit:cover;background:#f6f7f7}
+				.cpic-oauth__meta{color:#646970;font-size:12px}
+				.cpic-oauth__actions{display:flex;gap:8px;margin-top:16px}
+			</style>
+		</head>
+		<body>
+			<div class="cpic-oauth__card">
+				<h2 style="margin-top:0"><?php esc_html_e( 'Choose Pages to connect', 'custom-post-image-creator' ); ?></h2>
+				<p class="cpic-muted"><?php esc_html_e( 'Only the Pages you select will be connected. You can add more later.', 'custom-post-image-creator' ); ?></p>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php?action=cpic_facebook_connect_pages' ) ); ?>">
+					<?php wp_nonce_field( 'cpic_fb_connect_' . $picker_token ); ?>
+					<input type="hidden" name="picker_token" value="<?php echo esc_attr( $picker_token ); ?>">
+					<?php foreach ( $pages as $page ) : ?>
+						<label class="cpic-oauth__page">
+							<input type="checkbox" name="page_ids[]" value="<?php echo esc_attr( (string) $page['id'] ); ?>" checked>
+							<?php if ( ! empty( $page['picture'] ) ) : ?>
+								<img src="<?php echo esc_url( (string) $page['picture'] ); ?>" alt="">
+							<?php endif; ?>
+							<span>
+								<strong><?php echo esc_html( (string) $page['name'] ); ?></strong><br>
+								<span class="cpic-oauth__meta"><?php echo esc_html( (string) ( isset( $page['category'] ) ? $page['category'] : '' ) ); ?> · <code><?php echo esc_html( (string) $page['id'] ); ?></code><?php echo ! empty( $page['fan_count'] ) ? ' · ' . esc_html( number_format_i18n( (int) $page['fan_count'] ) . ' fans' ) : ''; ?></span>
+							</span>
+						</label>
+					<?php endforeach; ?>
+					<div class="cpic-oauth__actions">
+						<button type="submit" class="button button-primary"><?php esc_html_e( 'Connect selected Pages', 'custom-post-image-creator' ); ?></button>
+						<a href="#" onclick="window.close();return false;" class="button"><?php esc_html_e( 'Cancel', 'custom-post-image-creator' ); ?></a>
+					</div>
+				</form>
+			</div>
+		</body>
+		</html>
+		<?php
+		exit;
+	}
+
+	/**
+	 * Render success and close the popup, asking the opener to reload.
+	 *
+	 * @param int $count Number of pages connected.
+	 * @return void
+	 */
+	/**
+	 * Save Facebook App ID / Secret from the simple connections screen.
+	 *
+	 * @return void
+	 */
+	public function handle_save_facebook_creds() {
+		check_admin_referer( 'cpic_save_facebook_creds' );
+		$this->require_cap( 'cpic_manage_accounts' );
+
+		$settings = $this->container->get( 'settings' );
+		$app_id   = isset( $_POST['cpic_fb_app_id'] ) ? sanitize_text_field( wp_unslash( (string) $_POST['cpic_fb_app_id'] ) ) : '';
+
+		$result = $settings->bulk_set( array( 'cpic_fb_app_id' => $app_id ) );
+
+		// App Secret is secret type — only set if non-empty.
+		$app_secret = isset( $_POST['cpic_fb_app_secret'] ) ? trim( wp_unslash( (string) $_POST['cpic_fb_app_secret'] ) ) : '';
+		if ( '' !== $app_secret ) {
+			$settings->set( 'cpic_fb_app_secret', $app_secret );
+		}
+
+		if ( ! empty( $result['errors'] ) ) {
+			$this->back_to( 'cpic-accounts', 'error', implode( ' ', $result['errors'] ) );
+		}
+		$this->back_to( 'cpic-accounts', 'saved' );
+	}
+
+	/**
+	 * Save Telegram Bot Token / Chat ID from the simple connections screen.
+	 *
+	 * @return void
+	 */
+	public function handle_save_telegram() {
+		check_admin_referer( 'cpic_save_telegram' );
+		$this->require_cap( 'cpic_manage_accounts' );
+
+		$settings  = $this->container->get( 'settings' );
+		$chat_id   = isset( $_POST['cpic_tg_chat_id'] ) ? sanitize_text_field( wp_unslash( (string) $_POST['cpic_tg_chat_id'] ) ) : '';
+		$bot_token = isset( $_POST['cpic_tg_bot_token'] ) ? trim( wp_unslash( (string) $_POST['cpic_tg_bot_token'] ) ) : '';
+
+		$settings->bulk_set( array( 'cpic_tg_chat_id' => $chat_id ) );
+		if ( '' !== $bot_token ) {
+			$settings->set( 'cpic_tg_bot_token', $bot_token );
+			// Also keep destinations in sync for publishing.
+			$this->sync_telegram_destination( $chat_id, $bot_token );
+		} elseif ( '' !== $chat_id ) {
+			// Chat ID changed but token kept — ensure destination exists.
+			$existing = (string) $settings->get( 'cpic_tg_bot_token', '' );
+			if ( '' === $existing ) {
+				$existing = \CPIC\Security\Settings::reveal_secret( (string) get_option( 'cpic_tg_bot_token', '' ) );
+			}
+			if ( '' !== $existing ) {
+				$this->sync_telegram_destination( $chat_id, $existing );
+			}
+		}
+
+		$this->back_to( 'cpic-accounts', 'saved' );
+	}
+
+	/**
+	 * Ensure a Telegram destination exists for the given chat/bot.
+	 *
+	 * @param string $chat_id   Chat ID.
+	 * @param string $bot_token Bot token.
+	 * @return void
+	 */
+	private function sync_telegram_destination( $chat_id, $bot_token ) {
+		if ( '' === trim( (string) $chat_id ) || '' === trim( (string) $bot_token ) ) {
+			return;
+		}
+		$accounts = $this->container->get( 'accounts' );
+		$existing = $accounts->repo()->find_by_account( 'telegram', (string) $chat_id );
+		if ( $existing ) {
+			$accounts->update( (int) $existing['id'], array( 'credentials' => array( 'bot_token' => $bot_token ), 'status' => 'connected' ) );
+			return;
+		}
+		// Keep single Telegram channel for simple UI — remove old disconnected ones.
+		$accounts->create( array( 'provider' => 'telegram', 'label' => (string) $chat_id, 'account_id' => (string) $chat_id, 'credentials' => array( 'bot_token' => $bot_token ), 'status' => 'connected' ) );
+	}
+
+	/**
+	 * Disconnect Facebook Page (delete first facebook destination).
+	 *
+	 * @return void
+	 */
+	public function handle_disconnect_facebook() {
+		check_admin_referer( 'cpic_disconnect_facebook' );
+		$this->require_cap( 'cpic_manage_accounts' );
+		$rows = $this->container->get( 'accounts' )->all( array( 'provider' => 'facebook' ) );
+		foreach ( $rows as $row ) {
+			$this->container->get( 'accounts' )->delete( (int) $row['id'] );
+		}
+		$this->back_to( 'cpic-accounts', 'disconnected' );
+	}
+
+	/**
+	 * Test Telegram connection via getMe / send test.
+	 * Called via admin-post?cpic_test_telegram (AJAX-like but simple).
+	 *
+	 * @return void
+	 */
+	public function handle_test_telegram() {
+		check_admin_referer( 'cpic_test_telegram' );
+		$this->require_cap( 'cpic_manage_accounts' );
+
+		$settings  = $this->container->get( 'settings' );
+		$bot_token = \CPIC\Security\Settings::reveal_secret( (string) get_option( 'cpic_tg_bot_token', '' ) );
+		if ( '' === $bot_token ) {
+			$bot_token = trim( (string) $settings->get( 'cpic_tg_bot_token', '' ) );
+		}
+		$chat_id = isset( $_POST['cpic_tg_chat_id'] ) ? sanitize_text_field( wp_unslash( (string) $_POST['cpic_tg_chat_id'] ) ) : (string) $settings->get( 'cpic_tg_chat_id', '' );
+
+		if ( '' === $bot_token ) {
+			$this->back_to( 'cpic-accounts', 'error', __( 'Bot Token is missing.', 'custom-post-image-creator' ) );
+		}
+
+		// Minimal getMe check.
+		$url      = 'https://api.telegram.org/bot' . $bot_token . '/getMe';
+		$response = wp_remote_get( $url, array( 'timeout' => 15 ) );
+		if ( is_wp_error( $response ) ) {
+			$this->back_to( 'cpic-accounts', 'error', $response->get_error_message() );
+		}
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = json_decode( (string) wp_remote_retrieve_body( $response ), true );
+		if ( 200 !== $code || empty( $body['ok'] ) ) {
+			$msg = isset( $body['description'] ) ? (string) $body['description'] : __( 'Telegram test failed.', 'custom-post-image-creator' );
+			$this->back_to( 'cpic-accounts', 'error', $msg );
+		}
+
+		$this->back_to( 'cpic-accounts', 'tested' );
+	}
+
+	private function render_oauth_success( $count ) {
+		$accounts_url = admin_url( 'admin.php?page=cpic-accounts&cpic_notice=saved' );
+		?>
+		<!doctype html>
+		<html <?php language_attributes(); ?>>
+		<head>
+			<meta charset="<?php bloginfo( 'charset' ); ?>">
+			<title><?php esc_html_e( 'Connected', 'custom-post-image-creator' ); ?></title>
+			<style>body{font-family:-apple-system,sans-serif;padding:24px;text-align:center}</style>
+		</head>
+		<body>
+			<h2><?php echo esc_html( sprintf( _n( '%d Page connected', '%d Pages connected', $count, 'custom-post-image-creator' ), $count ) ); ?></h2>
+			<p><?php esc_html_e( 'You can close this window.', 'custom-post-image-creator' ); ?></p>
+			<script>
+				try {
+					if (window.opener && !window.opener.closed) {
+						window.opener.location.href = <?php echo wp_json_encode( $accounts_url ); ?>;
+						window.opener.focus();
+					}
+				} catch(e) {}
+				setTimeout(function(){ window.close(); }, 1200);
+			</script>
+			<p><a href="<?php echo esc_url( $accounts_url ); ?>" target="_blank" class="button button-primary"><?php esc_html_e( 'Open Social Accounts', 'custom-post-image-creator' ); ?></a></p>
+		</body>
+		</html>
+		<?php
+		exit;
 	}
 }

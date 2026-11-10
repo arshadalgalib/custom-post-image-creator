@@ -46,7 +46,7 @@ final class AccountsController extends BaseController {
 		);
 
 		$this->add(
-			'/(?P<id>\d+)',
+			'/(?P<id>\\d+)',
 			array(
 				'GET'    => array( 'callback' => array( $this, 'show' ) ),
 				'PUT'    => array( 'callback' => array( $this, 'update' ), 'permission' => $manage ),
@@ -55,13 +55,28 @@ final class AccountsController extends BaseController {
 		);
 
 		$this->add(
-			'/(?P<id>\d+)/verify',
+			'/(?P<id>\\d+)/verify',
 			array( 'POST' => array( 'callback' => array( $this, 'verify' ), 'permission' => $manage ) )
 		);
 
 		$this->add(
-			'/(?P<id>\d+)/default',
+			'/(?P<id>\\d+)/default',
 			array( 'POST' => array( 'callback' => array( $this, 'make_default' ), 'permission' => $manage ) )
+		);
+
+		$this->add(
+			'/facebook/oauth-url',
+			array( 'POST' => array( 'callback' => array( $this, 'facebook_oauth_url' ), 'permission' => $manage ) )
+		);
+
+		$this->add(
+			'/facebook/pages',
+			array( 'GET' => array( 'callback' => array( $this, 'facebook_pages' ), 'permission' => $manage ) )
+		);
+
+		$this->add(
+			'/facebook/connect',
+			array( 'POST' => array( 'callback' => array( $this, 'facebook_connect' ), 'permission' => $manage ) )
 		);
 	}
 
@@ -233,5 +248,99 @@ final class AccountsController extends BaseController {
 		$this->container->get( 'destinations' )->set_default( $id, (string) $destination['provider'] );
 
 		return $this->ok( array( 'default' => true ) );
+	}
+
+	/**
+	 * Facebook OAuth: get authorization URL for popup.
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 */
+	public function facebook_oauth_url( $request ) {
+		// Hassle-free: if App ID/Secret were typed but not yet saved, accept them here and persist.
+		$app_id     = $this->param( $request, 'app_id' );
+		$app_secret = $this->param( $request, 'app_secret' );
+		if ( '' !== $app_id ) {
+			$this->container->get( 'settings' )->set( 'cpic_fb_app_id', sanitize_text_field( $app_id ) );
+		}
+		if ( '' !== $app_secret ) {
+			$this->container->get( 'settings' )->set( 'cpic_fb_app_secret', $app_secret );
+		}
+
+		$oauth = $this->container->get( 'facebook_oauth' );
+		$url   = $oauth->authorization_url( get_current_user_id() );
+
+		if ( is_wp_error( $url ) ) {
+			return $this->fail( $url );
+		}
+
+		return $this->ok(
+			array(
+				'authorization_url' => $url,
+				'redirect_uri'      => $oauth->redirect_uri(),
+			)
+		);
+	}
+
+	/**
+	 * Facebook OAuth: list pages from picker transient (after popup callback).
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 */
+	public function facebook_pages( $request ) {
+		$token   = $this->param( $request, 'picker_token' );
+		$oauth   = $this->container->get( 'facebook_oauth' );
+		$payload = $oauth->get_picker_payload( $token );
+
+		if ( is_wp_error( $payload ) ) {
+			return $this->fail( $payload );
+		}
+
+		// Strip tokens for transport; only expose display data.
+		$pages = array();
+		foreach ( (array) $payload['pages'] as $page ) {
+			$pages[] = array(
+				'id'        => (string) $page['id'],
+				'name'      => (string) $page['name'],
+				'category'  => isset( $page['category'] ) ? (string) $page['category'] : '',
+				'fan_count' => isset( $page['fan_count'] ) ? (int) $page['fan_count'] : 0,
+				'picture'   => isset( $page['picture'] ) ? (string) $page['picture'] : '',
+			);
+		}
+
+		return $this->ok(
+			array(
+				'pages' => $pages,
+			)
+		);
+	}
+
+	/**
+	 * Facebook OAuth: connect selected pages.
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 */
+	public function facebook_connect( $request ) {
+		$token    = $this->param( $request, 'picker_token' );
+		$page_ids = $request->get_param( 'page_ids' );
+
+		if ( is_string( $page_ids ) ) {
+			$decoded = json_decode( $page_ids, true );
+			if ( is_array( $decoded ) ) {
+				$page_ids = $decoded;
+			} else {
+				$page_ids = array( $page_ids );
+			}
+		}
+
+		$result = $this->container->get( 'facebook_oauth' )->connect_pages( $token, (array) $page_ids );
+
+		if ( is_wp_error( $result ) ) {
+			return $this->fail( $result );
+		}
+
+		return $this->ok( array( 'connected' => $result ) );
 	}
 }

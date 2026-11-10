@@ -202,7 +202,7 @@ final class Plugin {
 	 * @return array<string,array<string,string>|string>
 	 */
 	public function load_failures() {
-		$failures = $this->load_failures();
+		$failures = $this->modules->failures();
 
 		if ( ! empty( $this->boot_error ) ) {
 			$failures['bootstrap'] = array(

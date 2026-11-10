@@ -138,7 +138,7 @@ final class AccountManager {
 				'account_name' => isset( $data['account_name'] ) ? sanitize_text_field( (string) $data['account_name'] ) : '',
 				'credentials'  => $this->encode( $credentials ),
 				'config'       => wp_json_encode( isset( $data['config'] ) && is_array( $data['config'] ) ? $data['config'] : array() ),
-				'status'       => isset( $data['status'] ) && 'connected' === $data['status'] ? 'connected' : 'disconnected',
+				'status'       => isset( $data['status'] ) && in_array( sanitize_key( (string) $data['status'] ), array( 'connected', 'disconnected', 'error', 'expired' ), true ) ? sanitize_key( (string) $data['status'] ) : 'disconnected',
 				'scopes'       => isset( $data['scopes'] ) ? sanitize_text_field( (string) $data['scopes'] ) : '',
 				'is_default'   => 0,
 				'priority'     => isset( $data['priority'] ) ? (int) $data['priority'] : 5,
@@ -596,8 +596,18 @@ final class AccountManager {
 			return null;
 		}
 
-		$credentials = $this->decode( isset( $row['credentials'] ) ? (string) $row['credentials'] : '' );
-		$config      = json_decode( (string) $row['config'], true );
+		// Idempotent: hydrate may be called on an already-hydrated row
+		// (e.g. public_view() after create()), so tolerate array values.
+		$credentials_raw = isset( $row['credentials'] ) ? $row['credentials'] : '';
+		$credentials_str = is_array( $credentials_raw ) ? '' : (string) $credentials_raw;
+		$credentials = $this->decode( $credentials_str );
+
+		$config_raw = isset( $row['config'] ) ? $row['config'] : '';
+		if ( is_array( $config_raw ) ) {
+			$config = $config_raw;
+		} else {
+			$config = json_decode( (string) $config_raw, true );
+		}
 
 		$row['id']         = (int) $row['id'];
 		$row['priority']   = (int) $row['priority'];

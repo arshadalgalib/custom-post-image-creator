@@ -56,18 +56,25 @@ abstract class BaseController {
 	 * @return void
 	 */
 	protected function add( $path, array $methods ) {
-		$args = array();
+		$endpoints = array();
 
-		foreach ( $methods as $method => $definition ) {
-			$args[ strtoupper( $method ) ] = array(
+		foreach ( $methods as $http_method => $definition ) {
+			$endpoint = array(
+				'methods'             => strtoupper( (string) $http_method ),
 				'callback'            => $definition['callback'],
 				'permission_callback' => isset( $definition['permission'] )
 					? $definition['permission']
 					: array( $this, 'can_access' ),
 			);
+
+			if ( isset( $definition['args'] ) ) {
+				$endpoint['args'] = $definition['args'];
+			}
+
+			$endpoints[] = $endpoint;
 		}
 
-		register_rest_route( CPIC_REST_NAMESPACE, $this->base() . $path, $args );
+		register_rest_route( CPIC_REST_NAMESPACE, $this->base() . $path, $endpoints );
 	}
 
 	/**

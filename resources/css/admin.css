@@ -642,6 +642,83 @@
 	border-color: #f0e2a5;
 }
 
+/* ── Social Media Connections (simple two-panel) ────────────────── */
+
+.cpic-connections-title {
+	font-size: 16px;
+	font-weight: 600;
+	margin: 12px 0 0;
+}
+
+.cpic-connections-hr {
+	border: 0;
+	border-top: 2px solid #2271b1;
+	margin: 6px 0 16px;
+}
+
+.cpic-connections {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 16px;
+	border: 1px solid var(--cpic-border);
+	border-radius: 8px;
+	padding: 16px;
+	background: #fff;
+}
+
+.cpic-connection-card {
+	border: 1px solid var(--cpic-border);
+	border-radius: 8px;
+	padding: 16px;
+	background: #fff;
+}
+
+.cpic-connection-card__head {
+	font-size: 14px;
+	font-weight: 600;
+	margin: 0 0 10px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.cpic-connected-line {
+	color: var(--cpic-success);
+	font-weight: 600;
+	font-size: 13px;
+	margin: 0 0 8px;
+}
+
+.cpic-connection-card .cpic-field input {
+	max-width: 100%;
+}
+
+.cpic-card-sep {
+	border: 0;
+	border-top: 1px solid #e5e5e5;
+	margin: 16px 0;
+}
+
+.cpic-btn-outline {
+	background: #fff !important;
+	border: 1px solid #2271b1 !important;
+	color: #2271b1 !important;
+}
+
+.cpic-btn-facebook {
+	background: #1877f2 !important;
+	border-color: #1877f2 !important;
+	color: #fff !important;
+	padding: 6px 16px !important;
+	height: auto !important;
+}
+
+@media screen and (max-width: 900px) {
+	.cpic-connections {
+		grid-template-columns: 1fr;
+	}
+}
+
 @media screen and (max-width: 782px) {
 	.cpic-list__meta {
 		margin-left: 0;

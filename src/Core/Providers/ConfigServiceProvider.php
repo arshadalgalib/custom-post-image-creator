@@ -150,6 +150,9 @@ final class ConfigServiceProvider extends ServiceProvider {
 		$c->factory( 'accounts', static function ( Container $c ) {
 			return new \CPIC\Publishing\AccountManager( $c );
 		} );
+		$c->factory( 'facebook_oauth', static function ( Container $c ) {
+			return new \CPIC\Publishing\FacebookOAuth( $c );
+		} );
 		$c->factory( 'captions', static function ( Container $c ) {
 			return new \CPIC\Publishing\CaptionBuilder( $c );
 		} );

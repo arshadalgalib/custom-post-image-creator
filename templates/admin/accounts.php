@@ -1,6 +1,9 @@
 <?php
 /**
- * Social accounts.
+ * Social accounts — simple two-panel UI (Facebook + Telegram).
+ *
+ * Matches the design in the screenshot: Facebook Page (OAuth + App ID/Secret)
+ * on the left, Telegram Channel (Bot Token + Chat ID) on the right.
  *
  * @package CustomPostImageCreator
  *
@@ -11,214 +14,152 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+$cpic_settings = $container->get( 'settings' );
 $cpic_accounts = $container->get( 'accounts' );
-$cpic_rows     = $cpic_accounts->all();
-$cpic_providers = $cpic_accounts->providers();
-$cpic_summary   = $cpic_accounts->summary();
-$cpic_can_edit  = $container->get( 'capabilities' )->can( 'cpic_manage_accounts' );
-$cpic_notice    = isset( $_GET['cpic_notice'] ) ? sanitize_key( wp_unslash( (string) $_GET['cpic_notice'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-$cpic_error     = get_transient( 'cpic_admin_error_' . get_current_user_id() );
-
+$cpic_can_edit = $container->get( 'capabilities' )->can( 'cpic_manage_accounts' );
+$cpic_notice   = isset( $_GET['cpic_notice'] ) ? sanitize_key( wp_unslash( (string) $_GET['cpic_notice'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+$cpic_error    = get_transient( 'cpic_admin_error_' . get_current_user_id() );
 if ( $cpic_error ) {
 	delete_transient( 'cpic_admin_error_' . get_current_user_id() );
 }
 
-$cpic_title    = __( 'Social accounts', 'custom-post-image-creator' );
-$cpic_subtitle = __( 'Where images and captions are published. Credentials are stored encrypted and never shown again after saving.', 'custom-post-image-creator' );
+// Facebook single-connection view (first connected Facebook destination).
+$cpic_fb_rows = $cpic_accounts->all( array( 'provider' => 'facebook' ) );
+$cpic_fb_connected = null;
+foreach ( $cpic_fb_rows as $r ) {
+	if ( 'connected' === (string) $r['status'] ) {
+		$cpic_fb_connected = $r;
+		break;
+	}
+}
+if ( ! $cpic_fb_connected && ! empty( $cpic_fb_rows ) ) {
+	$cpic_fb_connected = $cpic_fb_rows[0];
+}
 
-require __DIR__ . '/_header.php';
+// Telegram — single channel (first).
+$cpic_tg_rows = $cpic_accounts->all( array( 'provider' => 'telegram' ) );
+$cpic_tg_connected = ! empty( $cpic_tg_rows ) ? $cpic_tg_rows[0] : null;
+
+// Current credential values (for display).
+$cpic_fb_app_id     = (string) $cpic_settings->get( 'cpic_fb_app_id', '' );
+$cpic_fb_app_secret = (string) $cpic_settings->get( 'cpic_fb_app_secret', '' );
+$cpic_tg_bot_token  = (string) $cpic_settings->get( 'cpic_tg_bot_token', '' );
+$cpic_tg_chat_id    = (string) $cpic_settings->get( 'cpic_tg_chat_id', '' );
+
+// Also hydrate from destinations if present (they may have newer tokens).
+if ( $cpic_tg_connected ) {
+	if ( '' === $cpic_tg_chat_id ) {
+		$cpic_tg_chat_id = (string) $cpic_tg_connected['account_id'];
+	}
+}
+
+$cpic_title = __( 'Social Media Connections', 'custom-post-image-creator' );
+
 ?>
 <div class="wrap cpic-wrap">
 
+	<h1 class="cpic-connections-title"><?php echo esc_html( $cpic_title ); ?></h1>
+	<hr class="cpic-connections-hr">
+
 	<?php if ( 'saved' === $cpic_notice ) : ?>
-		<div class="notice notice-success inline"><p><?php esc_html_e( 'The account was saved.', 'custom-post-image-creator' ); ?></p></div>
+		<div class="notice notice-success inline"><p><?php esc_html_e( 'Saved.', 'custom-post-image-creator' ); ?></p></div>
+	<?php elseif ( 'disconnected' === $cpic_notice ) : ?>
+		<div class="notice notice-success inline"><p><?php esc_html_e( 'Disconnected.', 'custom-post-image-creator' ); ?></p></div>
+	<?php elseif ( 'tested' === $cpic_notice ) : ?>
+		<div class="notice notice-success inline"><p><?php esc_html_e( 'Connection test succeeded.', 'custom-post-image-creator' ); ?></p></div>
 	<?php endif; ?>
 	<?php if ( $cpic_error ) : ?>
 		<div class="notice notice-error inline"><p><?php echo esc_html( (string) $cpic_error ); ?></p></div>
 	<?php endif; ?>
 
-	<?php if ( empty( $cpic_rows ) ) : ?>
-		<div class="notice notice-warning inline">
-			<p><?php esc_html_e( 'No publishing destination is connected yet. Images can still be designed and downloaded, but nothing can be posted automatically.', 'custom-post-image-creator' ); ?></p>
-		</div>
-	<?php endif; ?>
+	<div class="cpic-connections">
 
-	<div class="cpic-grid cpic-grid--stats">
-		<?php foreach ( $cpic_providers as $cpic_key => $cpic_label ) : ?>
-			<?php $cpic_provider_summary = isset( $cpic_summary[ $cpic_key ] ) ? $cpic_summary[ $cpic_key ] : array( 'total' => 0, 'connected' => 0 ); ?>
-			<div class="cpic-card cpic-stat">
-				<span class="cpic-stat__value"><?php echo esc_html( number_format_i18n( (int) $cpic_provider_summary['connected'] ) ); ?></span>
-				<span class="cpic-stat__label"><?php echo esc_html( (string) $cpic_label ); ?></span>
-				<span class="cpic-stat__meta">
+		<!-- Facebook Page -->
+		<div class="cpic-connection-card">
+			<h2 class="cpic-connection-card__head"><span class="dashicons dashicons-facebook" style="font-size:18px"></span> <?php esc_html_e( 'Facebook Page', 'custom-post-image-creator' ); ?></h2>
+
+			<?php if ( $cpic_fb_connected ) : ?>
+				<p class="cpic-connected-line">
 					<?php
-					echo esc_html(
-						sprintf(
-							/* translators: %d: total accounts */
-							_n( '%d account', '%d accounts', (int) $cpic_provider_summary['total'], 'custom-post-image-creator' ),
-							(int) $cpic_provider_summary['total']
-						)
-					);
+					$label = ! empty( $cpic_fb_connected['account_name'] ) ? $cpic_fb_connected['account_name'] : $cpic_fb_connected['label'];
+					echo esc_html( sprintf( __( 'Connected: %s', 'custom-post-image-creator' ), $label ) );
 					?>
-				</span>
-			</div>
-		<?php endforeach; ?>
-	</div>
-
-	<?php foreach ( $cpic_rows as $cpic_account ) : ?>
-		<section class="cpic-card cpic-account">
-			<header class="cpic-account__header">
-				<h2>
-					<?php echo esc_html( '' !== (string) $cpic_account['label'] ? (string) $cpic_account['label'] : (string) $cpic_account['account_name'] ); ?>
-					<span class="cpic-badge cpic-badge--<?php echo esc_attr( (string) $cpic_account['status'] ); ?>"><?php echo esc_html( (string) $cpic_account['status'] ); ?></span>
-					<?php if ( ! empty( $cpic_account['is_default'] ) ) : ?>
-						<span class="cpic-badge cpic-badge--default"><?php esc_html_e( 'Default', 'custom-post-image-creator' ); ?></span>
-					<?php endif; ?>
-				</h2>
-				<p class="cpic-muted">
-					<?php echo esc_html( (string) $cpic_account['provider_label'] ); ?>
-					· <code><?php echo esc_html( (string) $cpic_account['account_id'] ); ?></code>
-					<?php if ( ! empty( $cpic_account['last_validated_at'] ) ) : ?>
-						· <?php echo esc_html( sprintf( /* translators: %s: datetime */ __( 'checked %s', 'custom-post-image-creator' ), (string) $cpic_account['last_validated_at'] ) ); ?>
-					<?php endif; ?>
 				</p>
-				<?php if ( ! empty( $cpic_account['last_error'] ) ) : ?>
-					<p class="cpic-error-text"><?php echo esc_html( (string) $cpic_account['last_error'] ); ?></p>
-				<?php endif; ?>
-				<?php if ( ! empty( $cpic_account['token_expiring'] ) ) : ?>
-					<p class="cpic-error-text"><?php esc_html_e( 'The access token expires within a week. Reconnect to avoid failed posts.', 'custom-post-image-creator' ); ?></p>
-				<?php endif; ?>
-			</header>
-
-			<details class="cpic-disclosure">
-				<summary><?php esc_html_e( 'Edit connection', 'custom-post-image-creator' ); ?></summary>
-
-				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="cpic-form" autocomplete="off">
-					<input type="hidden" name="action" value="cpic_save_account" />
-					<input type="hidden" name="account" value="<?php echo esc_attr( (string) $cpic_account['id'] ); ?>" />
-					<input type="hidden" name="provider" value="<?php echo esc_attr( (string) $cpic_account['provider'] ); ?>" />
-					<?php wp_nonce_field( 'cpic_account_' . (int) $cpic_account['id'] ); ?>
-
-					<div class="cpic-grid cpic-grid--two">
-						<p class="cpic-field">
-							<label for="cpic-account-label-<?php echo esc_attr( (string) $cpic_account['id'] ); ?>"><?php esc_html_e( 'Label', 'custom-post-image-creator' ); ?></label>
-							<input id="cpic-account-label-<?php echo esc_attr( (string) $cpic_account['id'] ); ?>" type="text" name="label" value="<?php echo esc_attr( (string) $cpic_account['label'] ); ?>" <?php disabled( ! $cpic_can_edit ); ?> />
-						</p>
-
-						<p class="cpic-field">
-							<label for="cpic-account-id-<?php echo esc_attr( (string) $cpic_account['id'] ); ?>">
-								<?php
-								echo esc_html(
-									'facebook' === $cpic_account['provider']
-										? __( 'Page ID', 'custom-post-image-creator' )
-										: __( 'Chat ID', 'custom-post-image-creator' )
-								);
-								?>
-							</label>
-							<input id="cpic-account-id-<?php echo esc_attr( (string) $cpic_account['id'] ); ?>" type="text" name="account_id" value="<?php echo esc_attr( (string) $cpic_account['account_id'] ); ?>" <?php disabled( ! $cpic_can_edit ); ?> />
-						</p>
-					</div>
-
-					<p class="cpic-field">
-						<label for="cpic-account-secret-<?php echo esc_attr( (string) $cpic_account['id'] ); ?>">
-							<?php
-							echo esc_html(
-								'facebook' === $cpic_account['provider']
-									? __( 'Page access token', 'custom-post-image-creator' )
-									: __( 'Bot token', 'custom-post-image-creator' )
-							);
-							?>
-						</label>
-						<input
-							id="cpic-account-secret-<?php echo esc_attr( (string) $cpic_account['id'] ); ?>"
-							type="password"
-							name="<?php echo esc_attr( 'facebook' === $cpic_account['provider'] ? 'page_token' : 'bot_token' ); ?>"
-							value=""
-							placeholder="<?php esc_attr_e( 'Leave blank to keep the stored token', 'custom-post-image-creator' ); ?>"
-							autocomplete="new-password"
-							<?php disabled( ! $cpic_can_edit ); ?>
-						/>
-						<span class="cpic-muted">
-							<?php
-							echo esc_html(
-								sprintf(
-									/* translators: %s: comma separated credential names */
-									__( 'Stored: %s', 'custom-post-image-creator' ),
-									empty( $cpic_account['credentials_set'] ) ? __( 'none', 'custom-post-image-creator' ) : implode( ', ', (array) $cpic_account['credentials_set'] )
-								)
-							);
-							?>
-						</span>
-					</p>
-
-					<?php if ( $cpic_can_edit ) : ?>
-						<p class="cpic-form__actions">
-							<button type="submit" class="button button-primary"><?php esc_html_e( 'Save connection', 'custom-post-image-creator' ); ?></button>
-						</p>
-					<?php endif; ?>
-				</form>
-			</details>
-
-			<?php if ( $cpic_can_edit ) : ?>
-				<footer class="cpic-account__actions">
-					<?php if ( 'connected' === (string) $cpic_account['status'] ) : ?>
-						<a class="button button-small" href="<?php echo esc_url( wp_nonce_url( add_query_arg( array( 'action' => 'cpic_account_status', 'cpic_action' => 'disable', 'account' => (int) $cpic_account['id'] ), admin_url( 'admin-post.php' ) ), 'cpic_account_status_disable_' . (int) $cpic_account['id'] ) ); ?>"><?php esc_html_e( 'Pause posting', 'custom-post-image-creator' ); ?></a>
-					<?php else : ?>
-						<a class="button button-small" href="<?php echo esc_url( wp_nonce_url( add_query_arg( array( 'action' => 'cpic_account_status', 'cpic_action' => 'enable', 'account' => (int) $cpic_account['id'] ), admin_url( 'admin-post.php' ) ), 'cpic_account_status_enable_' . (int) $cpic_account['id'] ) ); ?>"><?php esc_html_e( 'Re-enable posting', 'custom-post-image-creator' ); ?></a>
-					<?php endif; ?>
-
-					<a
-						class="button button-small cpic-danger"
-						href="<?php echo esc_url( wp_nonce_url( add_query_arg( array( 'action' => 'cpic_account_status', 'cpic_action' => 'delete', 'account' => (int) $cpic_account['id'] ), admin_url( 'admin-post.php' ) ), 'cpic_account_status_delete_' . (int) $cpic_account['id'] ) ); ?>"
-						onclick="return confirm('<?php echo esc_js( __( 'Remove this account? Delivery history is kept.', 'custom-post-image-creator' ) ); ?>');"
-					><?php esc_html_e( 'Remove', 'custom-post-image-creator' ); ?></a>
-				</footer>
+				<p>
+					<a href="#" id="cpic-fb-reconnect" class="button button-small cpic-btn-outline"><?php esc_html_e( 'Reconnect', 'custom-post-image-creator' ); ?></a>
+					<a href="<?php echo esc_url( wp_nonce_url( add_query_arg( array( 'action' => 'cpic_disconnect_facebook' ), admin_url( 'admin-post.php' ) ), 'cpic_disconnect_facebook' ) ); ?>" class="button button-small cpic-btn-outline" onclick="return confirm('<?php echo esc_js( __( 'Disconnect this Facebook Page?', 'custom-post-image-creator' ) ); ?>')"><?php esc_html_e( 'Disconnect', 'custom-post-image-creator' ); ?></a>
+				</p>
+			<?php else : ?>
+				<p class="cpic-muted"><?php esc_html_e( 'Not connected yet.', 'custom-post-image-creator' ); ?></p>
 			<?php endif; ?>
-		</section>
-	<?php endforeach; ?>
 
-	<?php if ( $cpic_can_edit ) : ?>
-		<section class="cpic-card">
-			<h2><?php esc_html_e( 'Connect an account', 'custom-post-image-creator' ); ?></h2>
-			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="cpic-form" autocomplete="off">
-				<input type="hidden" name="action" value="cpic_save_account" />
-				<input type="hidden" name="account" value="0" />
-				<?php wp_nonce_field( 'cpic_account_0' ); ?>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" autocomplete="off" class="cpic-form">
+				<input type="hidden" name="action" value="cpic_save_facebook_creds">
+				<?php wp_nonce_field( 'cpic_save_facebook_creds' ); ?>
 
 				<p class="cpic-field">
-					<label for="cpic-new-provider"><?php esc_html_e( 'Platform', 'custom-post-image-creator' ); ?></label>
-					<select id="cpic-new-provider" name="provider">
-						<?php foreach ( $cpic_providers as $cpic_key => $cpic_label ) : ?>
-							<option value="<?php echo esc_attr( (string) $cpic_key ); ?>"><?php echo esc_html( (string) $cpic_label ); ?></option>
-						<?php endforeach; ?>
-					</select>
-				</p>
-
-				<div class="cpic-grid cpic-grid--two">
-					<p class="cpic-field">
-						<label for="cpic-new-label"><?php esc_html_e( 'Label', 'custom-post-image-creator' ); ?></label>
-						<input id="cpic-new-label" type="text" name="label" placeholder="<?php esc_attr_e( 'Main page', 'custom-post-image-creator' ); ?>" />
-					</p>
-					<p class="cpic-field">
-						<label for="cpic-new-account-id"><?php esc_html_e( 'Page ID / Chat ID', 'custom-post-image-creator' ); ?></label>
-						<input id="cpic-new-account-id" type="text" name="account_id" required />
-					</p>
-				</div>
-
-				<p class="cpic-field">
-					<label for="cpic-new-secret"><?php esc_html_e( 'Page access token (Facebook) or bot token (Telegram)', 'custom-post-image-creator' ); ?></label>
-					<input id="cpic-new-secret" type="password" name="page_token" value="" autocomplete="new-password" />
-					<span class="cpic-muted"><?php esc_html_e( 'Send a bot token in the field above when connecting Telegram.', 'custom-post-image-creator' ); ?></span>
+					<label for="cpic-fb-app-id"><strong><?php esc_html_e( 'App ID', 'custom-post-image-creator' ); ?></strong></label>
+					<input id="cpic-fb-app-id" type="text" name="cpic_fb_app_id" value="<?php echo esc_attr( $cpic_fb_app_id ); ?>" placeholder="532597385947040" <?php disabled( ! $cpic_can_edit ); ?>>
 				</p>
 
 				<p class="cpic-field">
-					<label for="cpic-new-bot"><?php esc_html_e( 'Telegram bot token', 'custom-post-image-creator' ); ?></label>
-					<input id="cpic-new-bot" type="password" name="bot_token" value="" autocomplete="new-password" placeholder="123456:ABC-DEF…" />
+					<label for="cpic-fb-app-secret"><strong><?php esc_html_e( 'App Secret', 'custom-post-image-creator' ); ?></strong></label>
+					<input id="cpic-fb-app-secret" type="password" name="cpic_fb_app_secret" value="" placeholder="<?php echo '' !== $cpic_fb_app_secret ? '••••••••••' : ''; ?>" autocomplete="new-password" <?php disabled( ! $cpic_can_edit ); ?>>
+					<span class="cpic-muted"><?php esc_html_e( 'Stored securely on server. Leave blank to keep the saved secret.', 'custom-post-image-creator' ); ?></span>
 				</p>
 
-				<p class="cpic-form__actions">
-					<button type="submit" class="button button-primary"><?php esc_html_e( 'Connect account', 'custom-post-image-creator' ); ?></button>
-				</p>
+				<?php if ( $cpic_can_edit ) : ?>
+					<p><button type="submit" class="button cpic-btn-outline"><?php esc_html_e( 'Save Credentials', 'custom-post-image-creator' ); ?></button></p>
+				<?php endif; ?>
 			</form>
-		</section>
-	<?php endif; ?>
+
+			<hr class="cpic-card-sep">
+
+			<p>
+				<button type="button" id="cpic-fb-oauth-btn" class="button button-primary cpic-btn-facebook" <?php disabled( ! $cpic_can_edit ); ?>>
+					<span class="dashicons dashicons-facebook" style="font-size:16px;margin-top:2px"></span> <?php esc_html_e( 'Connect Facebook', 'custom-post-image-creator' ); ?>
+				</button>
+				<span id="cpic-fb-oauth-status" class="cpic-muted" role="status" aria-live="polite" style="margin-left:8px"></span>
+			</p>
+			<p class="cpic-muted"><?php esc_html_e( 'Click to authorize via Facebook OAuth popup. No manual tokens needed.', 'custom-post-image-creator' ); ?></p>
+
+		</div>
+
+		<!-- Telegram Channel -->
+		<div class="cpic-connection-card">
+			<h2 class="cpic-connection-card__head"><span class="dashicons dashicons-share" style="font-size:18px"></span> <?php esc_html_e( 'Telegram Channel', 'custom-post-image-creator' ); ?></h2>
+
+			<?php if ( $cpic_tg_connected && 'connected' === (string) $cpic_tg_connected['status'] ) : ?>
+				<p class="cpic-connected-line"><?php echo esc_html( sprintf( __( 'Connected: %s', 'custom-post-image-creator' ), $cpic_tg_connected['account_id'] ) ); ?></p>
+			<?php endif; ?>
+
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" autocomplete="off" class="cpic-form" id="cpic-tg-form">
+				<input type="hidden" name="action" value="cpic_save_telegram">
+				<?php wp_nonce_field( 'cpic_save_telegram' ); ?>
+
+				<p class="cpic-field">
+					<label for="cpic-tg-bot-token"><strong><?php esc_html_e( 'Bot Token', 'custom-post-image-creator' ); ?></strong></label>
+					<input id="cpic-tg-bot-token" type="text" name="cpic_tg_bot_token" value="" placeholder="<?php echo '' !== $cpic_tg_bot_token ? '••••••••••' : ''; ?>" autocomplete="new-password" <?php disabled( ! $cpic_can_edit ); ?>>
+					<span class="cpic-muted"><?php esc_html_e( 'Leave blank to keep the saved token.', 'custom-post-image-creator' ); ?></span>
+				</p>
+
+				<p class="cpic-field">
+					<label for="cpic-tg-chat-id"><strong><?php esc_html_e( 'Chat ID', 'custom-post-image-creator' ); ?></strong></label>
+					<input id="cpic-tg-chat-id" type="text" name="cpic_tg_chat_id" value="<?php echo esc_attr( $cpic_tg_chat_id ); ?>" placeholder="@channel or -100..." <?php disabled( ! $cpic_can_edit ); ?>>
+				</p>
+
+				<?php if ( $cpic_can_edit ) : ?>
+					<p style="display:flex;gap:8px;align-items:center">
+						<button type="submit" class="button button-primary"><?php esc_html_e( 'Save Telegram', 'custom-post-image-creator' ); ?></button>
+						<button type="button" id="cpic-tg-test-btn" class="button cpic-btn-outline"><?php esc_html_e( 'Test Connection', 'custom-post-image-creator' ); ?></button>
+						<span id="cpic-tg-test-status" class="cpic-muted" role="status" aria-live="polite"></span>
+					</p>
+				<?php else : ?>
+					<p><button type="button" id="cpic-tg-test-btn" class="button cpic-btn-outline"><?php esc_html_e( 'Test Connection', 'custom-post-image-creator' ); ?></button> <span id="cpic-tg-test-status" class="cpic-muted"></span></p>
+				<?php endif; ?>
+			</form>
+
+		</div>
+
+	</div>
 </div>

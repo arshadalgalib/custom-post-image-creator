@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 7.0.4
+Stable tag: 7.0.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,11 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 
 == Changelog ==
 
+= 7.0.5 =
+* Added: Facebook OAuth popup on Social Accounts — click Connect with Facebook, authorize on Facebook, choose Pages; tokens are exchanged and stored automatically, no manual copy-paste.
+* Fixed: activation notice recursion (`load_failures` called itself); destination status now honors all valid values.
+* Added: 10-minute state and 15-minute picker transients for OAuth, with admin-post handlers and REST endpoints on `cpic_manage_accounts`.
+
 = 7.0.4 =
 * Fixed: the failure notice could itself throw. It called `Plugin::instance()`, which builds the plugin if construction had failed, so the notice died in exactly the situation it was meant to report. It now uses `Plugin::loaded()`, which never builds anything.
 * Fixed: an activation request killed by a host time limit left the plugin half-installed - no tables, no capabilities - which surfaces as unrelated errors rather than an activation failure. Activation now records what it did not finish, and the remaining steps complete automatically on the next admin page load.
@@ -140,6 +145,9 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 See the previous readme for the 5.x/6.x history. Legacy classes (`CPIC_Template_Manager`, `CPIC_Image_Generator`, `CPIC_Facebook_Poster`, `CPIC_Telegram_Poster`, `CPIC_Settings`) remain loadable through compatibility adapters, and existing settings and credentials are imported once on upgrade.
 
 == Upgrade Notice ==
+
+= 7.0.5 =
+Facebook Login: connect Pages with a popup instead of pasting tokens. Configure your App ID and Secret in Settings → Social, add the shown redirect URI to the app, then click Connect with Facebook on Social Accounts.
 
 = 7.0.4 =
 Hardens activation against hosts that kill the request part-way, and stops the failure notice throwing in the one situation it exists for.
