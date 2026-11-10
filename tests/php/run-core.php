@@ -1149,6 +1149,39 @@ foreach ( CPIC_Test_State::$rest_routes as $route => $args ) {
 }
 CPIC_Test::ok( $all_have_permissions, 'Every REST route declares a permission callback' );
 
+/* The studio and the block editor both post the PNG as `binary`; the endpoint
+   documents `data`. Both must be accepted, or every browser render 400s. */
+$artifacts_controller = new \CPIC\REST\Controllers\ArtifactsController( $plugin->container() );
+
+$binary_request  = new WP_REST_Request(
+	array(
+		'post_id'     => $post_id,
+		'template_id' => (int) $created['id'],
+		'format'      => 'square',
+		'document'    => $changed_doc,
+		'binary'      => 'data:image/png;base64,' . base64_encode( cpic_test_png( 150, 150 ) ),
+	)
+);
+$binary_response = $artifacts_controller->store( $binary_request );
+$binary_body     = method_exists( $binary_response, 'get_data' ) ? $binary_response->get_data() : array();
+
+CPIC_Test::equal( 201, (int) $binary_response->get_status(), 'PNG posted as `binary` is accepted' );
+CPIC_Test::ok( isset( $binary_body['id'] ) && (int) $binary_body['id'] > 0, 'Stored artifact is returned to the caller' );
+
+$data_request  = new WP_REST_Request(
+	array(
+		'post_id' => $post_id,
+		'format'  => 'portrait',
+		'document' => $changed_doc,
+		'data'    => base64_encode( cpic_test_png( 150, 150 ) ),
+	)
+);
+$data_response = $artifacts_controller->store( $data_request );
+CPIC_Test::equal( 201, (int) $data_response->get_status(), 'PNG posted as `data` is accepted' );
+
+$empty_response = $artifacts_controller->store( new WP_REST_Request( array() ) );
+CPIC_Test::ok( (int) $empty_response->get_status() >= 400, 'An empty render is rejected' );
+
 /* ═══ 26. Campaigns + calendar ═══════════════════════════════ */
 
 CPIC_Test::suite( 'Campaigns and calendar' );

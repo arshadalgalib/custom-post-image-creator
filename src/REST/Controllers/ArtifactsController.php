@@ -115,7 +115,13 @@ final class ArtifactsController extends BaseController {
 	 * @return \WP_REST_Response
 	 */
 	public function store( $request ) {
+		// `data` is the documented field; `binary` is what the studio and the
+		// block editor send (a PNG data URL). Both are the same payload.
 		$data = $this->param( $request, 'data' );
+
+		if ( '' === $data ) {
+			$data = $this->param( $request, 'binary' );
+		}
 
 		if ( '' === $data ) {
 			return $this->fail( new \WP_Error( 'cpic_empty_render', __( 'No image data was received.', 'custom-post-image-creator' ), array( 'status' => 400 ) ) );

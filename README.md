@@ -19,7 +19,7 @@ Latin-only designs can render fully server-side; the plugin reports which render
 
 | Area | What it does |
 | --- | --- |
-| Design studio | Live canvas, layer list, drag-to-move, property inspector, format switching |
+| Design studio | Zoomable canvas with rulers, grid and safe-area guides; layer manager (reorder, rename, lock, hide, multi-select); 8 resize handles + rotation; snapping and alignment guides; rich typography, image and shape controls; undo/redo and version history; keyboard shortcuts; save, export and publish |
 | Templates | Twelve starters, revisions with restore, duplicate, favourites, search, JSON import/export |
 | Brand kits | Colours, logos and fonts that designs inherit and may override |
 | Publishing | Multiple Facebook Pages and Telegram channels, per-channel status and history |

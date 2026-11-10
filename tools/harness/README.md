@@ -11,6 +11,8 @@ executed inside WebAssembly PHP:
 | `run-php-tests.mjs` | The PHP suite runs against real SQLite: boot, schema/migration, encryption, settings, design schema, multi-format layouts, render plans, signatures, fonts, renderer guards, artifacts, publishing, deliveries, jobs, retries, accounts, captions, health, analytics, AI, REST, brands, media, legacy bridge, events |
 | `render-admin-screens.mjs` | Every admin screen renders against real services with seeded content, and no PHP diagnostic leaks into the HTML |
 | `render-canvas.mjs` | A real render plan is painted to a PNG by an independent canvas implementation — the only way to catch drawing bugs (e.g. a missing featured image silently erasing its layer) |
+| `studio-smoke.mjs` | The **real** `resources/js/studio.js` is booted against the **real** rendered admin markup in a DOM (jsdom, stubbed canvas/REST/media) and driven like a person: select, drag, resize, marquee, reorder, rename, multi-select, inline text, formats, shortcuts, zoom/pan, save, new design, export, network failure. Catches dead buttons, missing ids and regressions the PHP suite cannot see |
+| `studio-paint.mjs` | Real render plans are painted through the **studio's own painter** with a real Canvas backend, then sampled: not blank, opaque background, text/shapes over the background. Writes `out/studio-paint-*.png` |
 | `class-integrity.php` | Every `CPIC\...` class autoloads and every container service resolves — catches files whose namespace does not match their directory, which are invisible to PSR-4 and only appear as a runtime fatal |
 | `activation-smoke.php` | Loads the real entry file from a fresh boot, fires the registered activation hook, then asserts tables, options, capabilities, cron, idempotency and failure isolation |
 | `verify.mjs` | Runs all of the above in order; one command, one exit code |
@@ -32,10 +34,16 @@ node verify.mjs                       # every gate below, in order
 node php-lint.mjs ../../                          # syntax gate
 node smoke.mjs tools/harness/class-integrity.php  # autoload + container integrity
 node smoke.mjs tools/harness/activation-smoke.php # activation, from the entry file
-node run-php-tests.mjs ../../                     # 312 assertions
+node run-php-tests.mjs ../../                     # PHP assertions
 node render-admin-screens.mjs ../../              # 11 screens
 node render-canvas.mjs                            # writes out/plan-preview.png
+node studio-smoke.mjs ../../                      # the editor script, driven
+node studio-paint.mjs ../../                      # the editor's canvas painter
 ```
+
+Requirements: Node 18+, plus `jsdom` and `@napi-rs/canvas` (both installed by
+`npm install`). `studio-smoke.mjs` and `studio-paint.mjs` are the two gates that
+fail when a control exists but does nothing.
 
 All scripts exit non-zero on failure, so they can gate a release.
 

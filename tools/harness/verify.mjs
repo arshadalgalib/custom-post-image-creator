@@ -2,8 +2,10 @@
  * Full verification gate.
  *
  * Runs, in order: PHP lint, class/service integrity, activation simulation,
- * the PHP suite, the admin screens and the canvas render. Exits non-zero on the
- * first failure so CI and humans get one command and one answer.
+ * the PHP suite, the admin screens, the canvas render and the studio smoke
+ * test (which boots the real editor script in a DOM and drives it). Exits
+ * non-zero on the first failure so CI and humans get one command and one
+ * answer.
  */
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +23,8 @@ const steps = [
 	['PHP test suite', [process.execPath, 'run-php-tests.mjs', repo]],
 	['Admin screens', [process.execPath, 'render-admin-screens.mjs', repo]],
 	['Canvas render', [process.execPath, 'render-canvas.mjs']],
+	['Studio smoke (editor JS)', [process.execPath, 'studio-smoke.mjs', repo]],
+	['Studio paint (editor canvas)', [process.execPath, 'studio-paint.mjs', repo]],
 ];
 
 for (const [label, args] of steps) {

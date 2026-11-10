@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.1.0",
+    "jsdom": "^31.0.0",
     "php-wasm": "^0.2.0",
     "php-wasm-mbstring": "^0.2.0",
     "php-wasm-openssl": "^0.2.0",

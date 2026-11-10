@@ -4,7 +4,7 @@ Tags: social media, image generator, facebook, telegram, bangla, bengali
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 7.0.5
+Stable tag: 7.1.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -28,7 +28,7 @@ Most image tools draw Bengali text in PHP, where conjuncts and vowel signs break
 = Features =
 
 * **Twelve starter designs** for Bengali news media, newspapers, magazines, corporate notices, education, Islamic quotes, political campaigns, events, announcements, breaking news and quote cards.
-* **Design studio** with a live canvas, layer list, drag-to-move and a property inspector.
+* **Design studio** with a live canvas, layer manager, drag-to-move, resize and rotate handles, rulers, grid, safe-area guides, snapping, undo/redo, version history, a context-sensitive inspector and keyboard shortcuts. Every control works and every save is confirmed by the server before it is reported as saved.
 * **Multiple formats** — square (1080×1080), portrait (1080×1350), story (1080×1920), landscape (1200×675) and wide. Layouts re-anchor per format instead of being squashed.
 * **Brand kits** — colours, logos and Bengali type that designs inherit and can override.
 * **Template library** with revisions, restore, duplicate, favourites, search and JSON import/export.
@@ -96,6 +96,17 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 
 == Changelog ==
 
+= 7.1.0 =
+* New: the design studio is a full editor — an app-style header (inline design name, save status, undo/redo, preview, save, export, publish, more actions), a three-tab left sidebar (Design / Elements / Layers), a zoomable canvas with rulers, grid, safe area, guides and snapping, and a context-sensitive inspector.
+* New: layer manager with drag-to-reorder, rename (double-click or F2), visibility, lock, multi-select, duplicate, delete and bring-forward/send-backward/front/back.
+* New: 8 resize handles plus a rotation handle, arrow-key nudging, aspect-ratio and min/max resizing, smart alignment guides, marquee selection, Ctrl/⌘+wheel zoom, space-drag pan, pinch zoom and a right-click context menu.
+* New: rich text controls (family, weight, style, size, colour, alignment, vertical alignment, line height, letter spacing, max lines, auto-scale, ellipsis, uppercase, background, padding, radius, border, shadow, stroke) and inline canvas text editing.
+* New: image controls (media library, replace, fit cover/contain/fill/natural, focus X/Y, opacity, rotation, radius, border, shadow), drag-and-drop upload, shapes and gradients.
+* New: undo/redo with coalesced history, version history with restore, and a full keyboard shortcut set with a help dialog that never intercepts typing in a field.
+* New: saves are honest — a design is only reported as saved when the request succeeded, exports are rendered by the same painter as the preview, and a failed publish says so.
+* Fixed: posting a PNG to `cpic/v1/artifacts` with the `binary` field (what the studio and the block editor send) was rejected; the endpoint now accepts both `data` and `binary`.
+* Added: two editor gates to the verification harness. `studio-smoke.mjs` boots the real studio script against the real markup and drives it (79 checks); `studio-paint.mjs` paints real plans through the studio's painter and inspects the pixels.
+
 = 7.0.5 =
 * Added: Facebook OAuth popup on Social Accounts — click Connect with Facebook, authorize on Facebook, choose Pages; tokens are exchanged and stored automatically, no manual copy-paste.
 * Fixed: activation notice recursion (`load_failures` called itself); destination status now honors all valid values.
@@ -145,6 +156,9 @@ Only the requests needed to publish to the platforms you connected. AI assistanc
 See the previous readme for the 5.x/6.x history. Legacy classes (`CPIC_Template_Manager`, `CPIC_Image_Generator`, `CPIC_Facebook_Poster`, `CPIC_Telegram_Poster`, `CPIC_Settings`) remain loadable through compatibility adapters, and existing settings and credentials are imported once on upgrade.
 
 == Upgrade Notice ==
+
+= 7.1.0 =
+The Design Studio is now a full editor: layer manager, resize/rotate handles, rulers, grid, safe-area guides, snapping, undo/redo, version history and keyboard shortcuts. Existing designs, templates and per-format layouts open unchanged; no database migration is needed.
 
 = 7.0.5 =
 Facebook Login: connect Pages with a popup instead of pasting tokens. Configure your App ID and Secret in Settings → Social, add the shown redirect URI to the app, then click Connect with Facebook on Social Accounts.

@@ -68,6 +68,59 @@ document + post + format
 `RenderSignature::compute()` hashes the document + post content + format so an
 artifact can be proven current instead of assumed current.
 
+## The studio
+
+`templates/admin/studio.php` + `resources/js/studio.js` + `resources/css/studio.css`
+are one screen: an app shell (header, three-column body) whose only job is to
+edit a document and paint its plan.
+
+```
+#cpic-studio-state (JSON)  ← boot payload: document, template, posts, fonts, formats, can
+        │
+        ▼
+   studio.js boot()
+     ├── document model + history (snapshot per edit, coalesced by key)
+     ├── POST render/plan ──────────────► RenderPlanBuilder (server truth)
+     │        └── paint(plan)            same painter as the export
+     ├── overlay canvas                  handles, guides, marquee, grid, safe area
+     └── panels / inspector              built from the document, never from the plan
+```
+
+Rules that keep the editor honest:
+
+1. **The plan is the only thing painted.** The studio never re-implements text
+   layout, font fallback or image fitting; it paints exactly what the server
+   would hand to a renderer. While a field is being edited the *local* document
+   is folded into the last plan by element id (`repaintPreview(document)`), so
+   typing feels instant and the server's ordering, sanitising and dropped-layer
+   decisions still win.
+2. **Panels read the document, the canvas reads the plan.** The layer list and
+   inspector show what will be *saved*; the canvas shows what will be *rendered*.
+3. **One plan request per committed change.** A drag, a resize or a rotate
+   mutates layers locally for the preview, then commits once on `pointerup`
+   (`commitGeometry(…, { gesture: true })` + `finishGesture()`), pushing one
+   history entry and firing one request.
+4. **Format scoping is preserved.** Geometry edits write to
+   `layout[activeFormat]` when the active format is not the document's base
+   format, so switching formats never overwrites another format's layout
+   (`writeProp()` is the only writer).
+5. **Exports use the identical painter.** `renderPng()` paints into an offscreen
+   canvas at plan resolution (`els.headless`), awaits fonts and images first, so
+   a PNG can never capture a half-painted frame.
+6. **History is document snapshots**, coalesced by key inside a 1.2 s window;
+   `Escape` in an inline text editor restores the pre-edit text rather than
+   committing it.
+
+`window.CPICStudio = { export, paint, state, rerender, version }` is the block
+editor's entry point: `export(document, { postId, format, brandId })` returns a
+PNG data URL rendered by the same code path.
+
+Verification: `tools/harness/studio-smoke.mjs` boots this script against the
+real rendered markup in a DOM and drives it (selection, drag, resize, marquee,
+ordering, rename, inline text, formats, shortcuts, save, new design, export,
+network failure); `tools/harness/studio-paint.mjs` paints real plans through
+the studio's painter with a real Canvas backend and inspects the pixels.
+
 ## Publishing pipeline
 
 ```
