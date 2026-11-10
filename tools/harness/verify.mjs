@@ -25,6 +25,7 @@ const steps = [
 	['Canvas render', [process.execPath, 'render-canvas.mjs']],
 	['Studio smoke (editor JS)', [process.execPath, 'studio-smoke.mjs', repo]],
 	['Studio paint (editor canvas)', [process.execPath, 'studio-paint.mjs', repo]],
+	['Render doctor (every starter, every format)', [process.execPath, 'render-doctor.mjs', repo]],
 ];
 
 for (const [label, args] of steps) {

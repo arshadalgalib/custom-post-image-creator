@@ -73,6 +73,7 @@ $required = array(
 	'src/Support/Compat/bootstrap.php',
 	'src/Support/Compat/TemplateManagerAdapter.php',
 	'fonts/HindSiliguri-Regular.ttf',
+	'fonts/HindSiliguri-SemiBold.ttf',
 );
 
 // Assets are only asserted on a real site; the harness does not copy them.

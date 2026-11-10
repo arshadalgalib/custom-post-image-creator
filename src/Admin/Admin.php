@@ -254,7 +254,10 @@ final class Admin {
 			'confirmRetry'  => __( 'Retry this delivery?', 'custom-post-image-creator' ),
 			'noSelection'   => __( 'Select an element on the canvas to edit it.', 'custom-post-image-creator' ),
 			'browserRender' => __( 'Bengali text is shaped by your browser. Keep this tab open while saving.', 'custom-post-image-creator' ),
-			'offline'       => __( 'You appear to be offline. Changes are kept locally until you reconnect.', 'custom-post-image-creator' ),
+			'offline'       => __( 'The server could not be reached. Check your connection and try again.', 'custom-post-image-creator' ),
+			'timedOut'      => __( 'The server did not respond in time. Check your connection and try again.', 'custom-post-image-creator' ),
+			'badResponse'   => __( 'The server sent a response the editor could not read. Reload the page and try again.', 'custom-post-image-creator' ),
+			'renderFallback' => __( 'Some layers were drawn without their content. Check the highlighted layers before publishing.', 'custom-post-image-creator' ),
 		);
 	}
 

@@ -793,6 +793,27 @@ check('export did not store an artifact by itself', requests.filter((r) => r.url
 const rerendered = await studio.rerender(state().document, { format: 'square' });
 check('CPICStudio.rerender resolves with a plan', !!rerendered && Array.isArray(rerendered.layers));
 
+console.log('\n▶ Render honesty');
+
+const report = studio.lastReport;
+check('the painter publishes what it drew', !!report && Array.isArray(report.layers), report ? report.layers.length + ' rows' : 'none');
+check('the report records the canvas size', report && report.width > 0 && report.height > 0, report ? report.width + 'x' + report.height : 'n/a');
+check('every text layer that has content is reported', !report || report.layers.every((row) => row.type !== 'text' || row.drawn || row.reason === 'empty'),
+	String((report ? report.layers : []).filter((row) => row.type === 'text' && !row.drawn).length) + ' undrawn');
+check('type never reports as overflowing its box', !report || report.layers.every((row) => !(row.overflowY > 2)),
+	String((report ? report.layers : []).filter((row) => row.overflowY > 2).length) + ' overflowing');
+// Canvas bounds are asserted by render-doctor.mjs against real server plans;
+// this stub plan has no auto-fit, so only the painter's own bookkeeping is
+// checkable here.
+check('the report measures every drawn text block', !report || report.layers.every((row) => row.type !== 'text' || !row.drawn || (row.bottom > row.y && row.blockHeight > 0)),
+	String((report ? report.layers : []).filter((row) => row.type === 'text' && row.drawn && !(row.blockHeight > 0)).length) + ' unmeasured');
+check('no layer raised a paint error', !report || report.layers.every((row) => row.reason !== 'error'),
+	String((report ? report.layers : []).filter((row) => row.reason === 'error').length) + ' errors');
+
+const exportPng = await studio.export(state().document, { postId: 501, format: 'square' });
+check('export still returns a PNG after the report was added', typeof exportPng === 'string' && exportPng.startsWith('data:image/png'));
+
+
 console.log('\n▶ Menus and dialogs');
 
 click(q('#cpic-more'));
@@ -906,6 +927,43 @@ await sleep(200);
 check('a failing plan request does not throw', true);
 check('a failing plan request shows an error toast', qa('#cpic-toasts .cpic-toast').length > 0);
 check('the studio still holds the last good plan', !!state().plan);
+
+// A dead server must produce a message a user can act on, not a raw
+// "TypeError: Failed to fetch".
+const toastText = qa('#cpic-toasts .cpic-toast').map((node) => node.textContent || '').join(' ');
+check('the failure message is written for a human', /could not be reached|connection|network|offline|respond/i.test(toastText),
+	toastText.slice(0, 120));
+check('the failure message never leaks a raw exception', !/TypeError|undefined|\[object/i.test(toastText), toastText.slice(0, 120));
+
+// A request that never answers must time out instead of hanging the editor.
+let aborted = 0;
+window.fetch = (url, options) => new Promise((resolve, reject) => {
+	const signal = options && options.signal;
+	if (signal) {
+		signal.addEventListener('abort', () => {
+			aborted++;
+			const error = new Error('aborted');
+			error.name = 'AbortError';
+			reject(error);
+		});
+	}
+});
+const startedAt = Date.now();
+await studio.rerender(state().document, {});
+await sleep(150);
+check('a stalled request aborts instead of hanging', aborted > 0, String(aborted) + ' abort(s) in ' + (Date.now() - startedAt) + 'ms');
+const stallText = qa('#cpic-toasts .cpic-toast').map((node) => node.textContent || '').join(' ');
+check('a timeout is reported in plain language', /did not respond in time|connection/i.test(stallText), stallText.slice(0, 120));
+
+// A 200 carrying an unreadable body is a failure, not a success.
+window.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error('not json'); } });
+const beforeBadPayload = qa('#cpic-toasts .cpic-toast').length;
+await studio.rerender(state().document, {});
+await sleep(150);
+check('an unreadable 200 shows an error rather than pretending to succeed',
+	qa('#cpic-toasts .cpic-toast').length > beforeBadPayload || /could not read|reload/i.test(qa('#cpic-toasts .cpic-toast').map((n) => n.textContent).join(' ')),
+	String(qa('#cpic-toasts .cpic-toast').length - beforeBadPayload) + ' new toast(s)');
+
 window.fetch = originalFetch;
 
 console.log('');

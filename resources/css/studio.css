@@ -1294,6 +1294,9 @@
 	position: absolute;
 	right: 12px;
 	bottom: 10px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
 	padding: 3px 9px;
 	border-radius: 999px;
 	background: rgba(255, 255, 255, 0.9);
@@ -1303,6 +1306,28 @@
 	font-variant-numeric: tabular-nums;
 	pointer-events: none;
 	z-index: 5;
+}
+
+/* Anything the renderer could not draw faithfully: visible before export. */
+.cpic-studio .cpic-workspace__status.is-warning {
+	background: #fffbeb;
+	border-color: #fcd34d;
+	color: #92400e;
+}
+
+.cpic-studio .cpic-render-warnings {
+	max-width: 340px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding-left: 8px;
+	border-left: 1px solid currentColor;
+}
+
+@media (max-width: 1024px) {
+	.cpic-studio .cpic-render-warnings {
+		max-width: 180px;
+	}
 }
 
 /* ── Selection toolbar ──────────────────────────────────────────── */

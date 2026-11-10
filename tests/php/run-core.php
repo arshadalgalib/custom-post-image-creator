@@ -646,6 +646,26 @@ CPIC_Test::ok(
 	'Font CSS uses plugin URLs, not server paths'
 );
 
+// Every declared weight must be backed by a real face: a weight with no file
+// makes the browser synthesise bold for Bengali, which thickens the glyphs
+// without moving the advance widths, so the design measures one thing and
+// paints another.
+$manifest_rows = $fonts->manifest();
+$declared      = array();
+foreach ( $manifest_rows as $font_row ) {
+	if ( empty( $font_row['available'] ) ) {
+		continue;
+	}
+	$declared[ $font_row['family'] ][ (int) $font_row['weight'] ] = true;
+}
+
+CPIC_Test::ok( isset( $declared['Hind Siliguri'][600] ), 'Hind Siliguri ships a real semibold face' );
+CPIC_Test::ok( ! isset( $declared['Noto Sans Bengali'][700] ), 'No bold weight is declared without a matching file' );
+
+$css = $fonts->css();
+CPIC_Test::ok( 1 === preg_match_all( "/@font-face\{font-family:'Hind Siliguri';font-style:normal;font-weight:600/", $css ), 'The semibold face is emitted in CSS' );
+CPIC_Test::ok( false === strpos( $css, 'HindSiliguri-Regular.ttf', 0 ) || substr_count( $css, 'HindSiliguri-Regular.ttf' ) === 1, 'The regular face is declared exactly once' );
+
 $resolved = $fonts->resolve( 'Siyam Rupali' );
 CPIC_Test::ok( null !== $resolved && ! empty( $resolved['bengali'] ), 'Unknown families fall back to a Bengali face' );
 

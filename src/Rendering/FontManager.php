@@ -81,11 +81,10 @@ final class FontManager {
 				'family'     => 'Hind Siliguri',
 				'weight'     => 600,
 				'style'      => 'normal',
-				'file'       => 'fonts/HindSiliguri-Regular.ttf',
+				'file'       => 'fonts/HindSiliguri-SemiBold.ttf',
 				'script'     => 'beng',
 				'bengali'    => true,
 				'label'      => 'Hind Siliguri Semibold',
-				'synthetic'  => true,
 			),
 		);
 
@@ -120,6 +119,25 @@ final class FontManager {
 			$font['format']    = 'truetype';
 
 			$out[] = $font;
+		}
+
+		// Only advertise weights that a real face backs. A declared weight with
+		// no file makes the browser *synthesise* bold for a complex script,
+		// which thickens the glyphs without moving the advance widths — so the
+		// design measures one width and paints another.
+		$synthetic = array();
+
+		foreach ( $out as $font ) {
+			if ( ! $font['available'] ) {
+				continue;
+			}
+			$synthetic[ $font['family'] ][] = (int) $font['weight'];
+		}
+
+		foreach ( $out as $index => $font ) {
+			$real = isset( $synthetic[ $font['family'] ] ) ? $synthetic[ $font['family'] ] : array();
+			$out[ $index ]['weights']     = array_values( array_unique( $real ) );
+			$out[ $index ]['weight_real'] = true;
 		}
 
 		/**

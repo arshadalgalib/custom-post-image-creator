@@ -418,19 +418,54 @@
 		}
 
 		var url = CONFIG.restRoot.replace( /\/$/, '' ) + ( path.charAt( 0 ) === '/' ? path : '/' + path );
-		var response = await fetch( url, {
-			method: options.method || 'GET',
-			credentials: 'same-origin',
-			headers: Object.assign(
-				{
-					'Content-Type': 'application/json',
-					'X-WP-Nonce': CONFIG.nonce || '',
-				},
-				options.headers || {}
-			),
-			body: options.body ? JSON.stringify( options.body ) : undefined,
-			signal: options.signal,
-		} );
+
+		// A request that never answers must not freeze the editor: WordPress
+		// hosts stall for all sorts of reasons, and a spinner with no message
+		// is worse than an error the user can act on.
+		var timeout = options.timeout || num( CONFIG.requestTimeout, 20000 );
+		var controller = typeof AbortController === 'function' ? new AbortController() : null;
+		var timer = null;
+
+		if ( controller && ! options.signal ) {
+			timer = window.setTimeout( function () {
+				controller.abort();
+			}, timeout );
+		}
+
+		var response;
+
+		try {
+			response = await fetch( url, {
+				method: options.method || 'GET',
+				credentials: 'same-origin',
+				headers: Object.assign(
+					{
+						'Content-Type': 'application/json',
+						'X-WP-Nonce': CONFIG.nonce || '',
+					},
+					options.headers || {}
+				),
+				body: options.body ? JSON.stringify( options.body ) : undefined,
+				signal: options.signal || ( controller ? controller.signal : undefined ),
+			} );
+		} catch ( error ) {
+			if ( timer ) {
+				window.clearTimeout( timer );
+			}
+
+			var network = new Error(
+				error && error.name === 'AbortError'
+					? str( 'timedOut', 'The server did not respond in time. Check your connection and try again.' )
+					: str( 'offline', 'The server could not be reached. Check your connection and try again.' )
+			);
+			network.code = error && error.name === 'AbortError' ? 'timeout' : 'network';
+			network.timeout = timeout;
+			throw network;
+		}
+
+		if ( timer ) {
+			window.clearTimeout( timer );
+		}
 
 		var payload = null;
 		try {
@@ -445,6 +480,15 @@
 			failure.code = payload && payload.code ? payload.code : 'http_' + response.status;
 			failure.status = response.status;
 			throw failure;
+		}
+
+		if ( null === payload ) {
+			// A 200 with a body the editor cannot read (a PHP notice, a login
+			// page) looks like success but carries nothing usable.
+			var unreadable = new Error( str( 'badResponse', 'The server sent a response the editor could not read. Reload the page and try again.' ) );
+			unreadable.code = 'bad_payload';
+			unreadable.status = response.status;
+			throw unreadable;
 		}
 
 		return payload;
@@ -716,7 +760,9 @@
 				x: num( layer.x ),
 				y: num( layer.y ),
 				width: num( layer.width ),
-				height: num( layer.height ),
+				// An auto-height layer (text, natural-ratio logo) reports the box
+				// the editor should manipulate, not the plan's placeholder 0.
+				height: num( layer.height ) > 0 ? num( layer.height ) : hitHeight( layer ),
 				rotation: num( layer.rotation ),
 				z: num( layer.z ),
 				opacity: num( layer.opacity, 1 ),
@@ -1214,6 +1260,13 @@
 		ctx.save();
 		ctx.clearRect( 0, 0, width, height );
 
+		// A design must never export with transparent pixels: paint the base
+		// colour first, then whatever the background type asks for on top.
+		var baseColour = isColour( config.background_color ) ? config.background_color : '#0F172A';
+
+		applyColour( ctx, baseColour, '#0F172A' );
+		ctx.fillRect( 0, 0, width, height );
+
 		if ( config.background_type === 'image' && config.background_image ) {
 			var cached = state.imageCache.get( config.background_image );
 			var paintBackgroundImage = function ( image ) {
@@ -1243,48 +1296,41 @@
 				hasContent = true;
 			}
 			if ( ! hasContent ) {
-				ctx.fillStyle = config.background_color || '#0F172A';
+				applyColour( ctx, baseColour, '#0F172A' );
 				ctx.fillRect( 0, 0, width, height );
 			}
 		} else if ( config.background_type === 'gradient' || ( ! config.background_type && config.gradient_from ) ) {
-			// CSS gradient angles are 0deg = to top; convert to canvas coordinates.
-			var radians = ( ( num( config.gradient_angle, 135 ) - 90 ) * Math.PI ) / 180;
-			var cx = width / 2;
-			var cy = height / 2;
-			var length = Math.abs( width * Math.cos( radians ) ) + Math.abs( height * Math.sin( radians ) );
-			var gradient = ctx.createLinearGradient(
-				cx - ( Math.cos( radians ) * length ) / 2,
-				cy - ( Math.sin( radians ) * length ) / 2,
-				cx + ( Math.cos( radians ) * length ) / 2,
-				cy + ( Math.sin( radians ) * length ) / 2
+			var gradient = makeGradient(
+				ctx,
+				{ x: 0, y: 0, width: width, height: height },
+				config.gradient_angle,
+				config.gradient_from,
+				config.gradient_to
 			);
 
-			gradient.addColorStop( 0, config.gradient_from || '#667EEA' );
-			gradient.addColorStop( 1, config.gradient_to || '#764BA2' );
-			ctx.fillStyle = gradient;
-			ctx.fillRect( 0, 0, width, height );
-			hasContent = true;
-		} else {
-			ctx.fillStyle = config.background_color || '#0F172A';
-			ctx.fillRect( 0, 0, width, height );
+			// An unusable gradient keeps the base colour instead of going blank.
+			if ( gradient ) {
+				ctx.fillStyle = gradient;
+				ctx.fillRect( 0, 0, width, height );
+			}
 			hasContent = true;
 		}
 
 		// Overlay: a real design element of the document, so it must export too.
 		var overlay = config.overlay || {};
 		if ( overlay.enabled && ( overlay.from || overlay.to ) ) {
-			var angle = ( num( overlay.angle, 90 ) - 90 ) * Math.PI / 180;
-			var half = Math.abs( width * Math.cos( angle ) ) + Math.abs( height * Math.sin( angle ) );
-			var overlayGradient = ctx.createLinearGradient(
-				cx - ( Math.cos( angle ) * half ) / 2,
-				cy - ( Math.sin( angle ) * half ) / 2,
-				cx + ( Math.cos( angle ) * half ) / 2,
-				cy + ( Math.sin( angle ) * half ) / 2
+			var overlayGradient = makeGradient(
+				ctx,
+				{ x: 0, y: 0, width: width, height: height },
+				overlay.angle,
+				overlay.from,
+				overlay.to
 			);
-			overlayGradient.addColorStop( 0, overlay.from || 'rgba(9,12,24,0.05)' );
-			overlayGradient.addColorStop( 1, overlay.to || 'rgba(9,12,24,0.82)' );
-			ctx.fillStyle = overlayGradient;
-			ctx.fillRect( 0, 0, width, height );
+
+			if ( overlayGradient ) {
+				ctx.fillStyle = overlayGradient;
+				ctx.fillRect( 0, 0, width, height );
+			}
 		}
 
 		ctx.restore();
@@ -1360,6 +1406,38 @@
 		var paragraphs = String( text ).split( /\r?\n/ );
 		var lines = [];
 
+		/**
+		 * Break one word that is wider than the box.
+		 *
+		 * Bengali and URLs both produce long unspaced runs; without this a single
+		 * word spills out of the safe area and can leave the design entirely.
+		 *
+		 * @param {string} word Unbreakable token.
+		 * @return {string[]} Pieces that each fit.
+		 */
+		var breakWord = function ( word ) {
+			var pieces = [];
+			var piece = '';
+
+			Array.from( word ).forEach( function ( character ) {
+				var candidate = piece + character;
+
+				if ( piece && measureLine( ctx, candidate ) > maxWidth ) {
+					pieces.push( piece );
+					piece = character;
+					return;
+				}
+
+				piece = candidate;
+			} );
+
+			if ( piece ) {
+				pieces.push( piece );
+			}
+
+			return pieces.length ? pieces : [ word ];
+		};
+
 		paragraphs.forEach( function ( paragraph ) {
 			var words = paragraph.split( /\s+/ ).filter( Boolean );
 			var current = '';
@@ -1372,12 +1450,34 @@
 			words.forEach( function ( word ) {
 				var candidate = current ? current + ' ' + word : word;
 
-				if ( ctx.measureText( candidate ).width <= maxWidth || ! current ) {
+				if ( measureLine( ctx, candidate ) <= maxWidth ) {
 					current = candidate;
 					return;
 				}
 
+				if ( ! current ) {
+					// The word cannot even start a line: break it by character.
+					var pieces = breakWord( word );
+
+					pieces.slice( 0, -1 ).forEach( function ( piece ) {
+						lines.push( piece );
+					} );
+					current = pieces[ pieces.length - 1 ];
+					return;
+				}
+
 				lines.push( current );
+
+				if ( measureLine( ctx, word ) > maxWidth ) {
+					var halves = breakWord( word );
+
+					halves.slice( 0, -1 ).forEach( function ( piece ) {
+						lines.push( piece );
+					} );
+					current = halves[ halves.length - 1 ];
+					return;
+				}
+
 				current = word;
 			} );
 
@@ -1394,13 +1494,254 @@
 		return lines;
 	}
 
+	/**
+	 * Whether a value is a colour the canvas will accept.
+	 *
+	 * An invalid `fillStyle` is *silently ignored* by browsers, which leaves the
+	 * previous style in place — so one bad value can paint an entire background
+	 * grey. An invalid `addColorStop` throws instead, which would abort the whole
+	 * paint. Every colour therefore goes through here first.
+	 *
+	 * @param {*} value Candidate colour.
+	 * @return {boolean} True when the canvas can parse it.
+	 */
+	var colourCache = new Map();
+
+	function isColour( value ) {
+		var text = String( value === undefined || value === null ? '' : value ).trim();
+
+		if ( '' === text ) {
+			return false;
+		}
+
+		if ( colourCache.has( text ) ) {
+			return colourCache.get( text );
+		}
+
+		var valid = false;
+
+		try {
+			// `CSS.supports` is the browser's own parser; fall back to assigning
+			// to a throwaway context when it is unavailable.
+			if ( window.CSS && typeof window.CSS.supports === 'function' ) {
+				valid = window.CSS.supports( 'color', text );
+			} else {
+				// No CSS.supports: ask the canvas itself, twice with different
+				// sentinels. An invalid assignment leaves the sentinel in place,
+				// and "kept both sentinels" cannot be a real colour.
+				var probe = document.createElement( 'canvas' ).getContext( '2d' );
+				probe.fillStyle = '#010203';
+				probe.fillStyle = text;
+				var first = String( probe.fillStyle );
+				probe.fillStyle = '#040506';
+				probe.fillStyle = text;
+				var second = String( probe.fillStyle );
+
+				valid = ! ( first === '#010203' && second === '#040506' );
+			}
+		} catch ( error ) {
+			valid = false;
+		}
+
+		// Gradients and patterns are not "colours", but they are valid fills.
+		if ( ! valid && typeof value === 'object' ) {
+			valid = true;
+		}
+
+		colourCache.set( text, valid );
+
+		if ( colourCache.size > 500 ) {
+			colourCache.clear();
+		}
+
+		return valid;
+	}
+
+	/**
+	 * Use a colour only if the canvas can parse it.
+	 *
+	 * @param {CanvasRenderingContext2D} ctx        Context.
+	 * @param {*}                        value      Candidate colour.
+	 * @param {string}                   fallback   Colour to keep when invalid.
+	 * @param {string}                   property   'fillStyle' | 'strokeStyle'.
+	 * @return {boolean} True when the value was applied.
+	 */
+	function applyColour( ctx, value, fallback, property ) {
+		var key = property || 'fillStyle';
+
+		if ( isColour( value ) ) {
+			ctx[ key ] = value;
+			return true;
+		}
+
+		if ( fallback ) {
+			ctx[ key ] = fallback;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Add a gradient stop only when the colour parses.
+	 *
+	 * @param {CanvasGradient} gradient Gradient.
+	 * @param {number}         offset   Stop offset.
+	 * @param {*}              colour   Stop colour.
+	 * @param {string}         fallback Fallback colour.
+	 * @return {boolean} True when the stop was added.
+	 */
+	function addStop( gradient, offset, colour, fallback ) {
+		var value = isColour( colour ) ? colour : fallback;
+
+		if ( ! isColour( value ) ) {
+			return false;
+		}
+
+		try {
+			gradient.addColorStop( Math.min( 1, Math.max( 0, num( offset ) ) ), value );
+			return true;
+		} catch ( error ) {
+			return false;
+		}
+	}
+
+	/**
+	 * CSS gradient geometry for a box.
+	 *
+	 * CSS angles run clockwise from "to top"; canvas coordinates grow downwards.
+	 * The line is clipped to the box the way CSS does it, so a 135° gradient
+	 * looks the same in the preview and in the image.
+	 *
+	 * @param {string} angle CSS angle in degrees.
+	 * @param {number} x     Box x.
+	 * @param {number} y     Box y.
+	 * @param {number} width Box width.
+	 * @param {number} height Box height.
+	 * @return {Object} { x0, y0, x1, y1 }.
+	 */
+	function gradientLine( angle, x, y, width, height ) {
+		var degrees = num( angle, 180 );
+		var radians = ( degrees * Math.PI ) / 180;
+		var cx = x + width / 2;
+		var cy = y + height / 2;
+		var dx = Math.sin( radians );
+		var dy = -Math.cos( radians );
+		var length = Math.abs( width * dx ) + Math.abs( height * dy );
+		var half = Math.max( 1, length ) / 2;
+
+		return {
+			x0: cx - dx * half,
+			y0: cy - dy * half,
+			x1: cx + dx * half,
+			y1: cy + dy * half,
+		};
+	}
+
+	/**
+	 * Build a linear gradient for a box, or null when both stops are unusable.
+	 *
+	 * @param {CanvasRenderingContext2D} ctx    Context.
+	 * @param {Object}                   box    { x, y, width, height }.
+	 * @param {string}                   angle  CSS angle.
+	 * @param {*}                        from   First colour.
+	 * @param {*}                        to     Last colour.
+	 * @return {CanvasGradient|null} Gradient.
+	 */
+	function makeGradient( ctx, box, angle, from, to ) {
+		var line = gradientLine( angle, box.x, box.y, box.width, box.height );
+		var gradient;
+
+		try {
+			gradient = ctx.createLinearGradient( line.x0, line.y0, line.x1, line.y1 );
+		} catch ( error ) {
+			return null;
+		}
+
+		var added = addStop( gradient, 0, from, '#000000' ) | addStop( gradient, 1, to, '#000000' );
+
+		// `|` on booleans is intentional: both stops are attempted.
+		return added ? gradient : null;
+	}
+
+	/**
+	 * Extra stroke width applied when a requested weight has no real face.
+	 *
+	 * Synthetic bold drawn by the browser is inconsistent (some engines widen
+	 * the glyphs, others ignore the request entirely), so the painter applies
+	 * its own, and measures it, instead of hoping.
+	 */
+	var fauxBold = 0;
+
+	/**
+	 * Weights a family actually ships.
+	 *
+	 * @param {string} family Family name.
+	 * @return {Array<number>} Sorted weights.
+	 */
+	function fontWeightsFor( family ) {
+		var rows = ( state.meta && state.meta.fonts ) || ( typeof CPIC !== 'undefined' && CPIC.fonts ) || [];
+		var weights = [];
+
+		rows.forEach( function ( font ) {
+			if ( font.family === family && font.weight ) {
+				weights.push( num( font.weight ) );
+			}
+		} );
+
+		weights = weights.filter( function ( weight, index ) {
+			return weights.indexOf( weight ) === index;
+		} ).sort( function ( a, b ) {
+			return a - b;
+		} );
+
+		return weights.length ? weights : [ 400 ];
+	}
+
+	/**
+	 * Nearest weight the family really ships.
+	 *
+	 * @param {string} family   Family name.
+	 * @param {number} requested Requested weight.
+	 * @return {number} Usable weight.
+	 */
+	function resolveWeight( family, requested ) {
+		var weights = fontWeightsFor( family );
+		var wanted = num( requested, 400 );
+		var best = weights[ 0 ];
+
+		weights.forEach( function ( weight ) {
+			if ( Math.abs( weight - wanted ) < Math.abs( best - wanted ) ) {
+				best = weight;
+			}
+		} );
+
+		return best;
+	}
+
+	/**
+	 * Width of one measured line, including any synthetic bold overhang.
+	 *
+	 * @param {CanvasRenderingContext2D} ctx  Context.
+	 * @param {string}                   line Line.
+	 * @return {number} Width in pixels.
+	 */
+	function measureLine( ctx, line ) {
+		return ctx.measureText( line ).width + ( fauxBold ? fauxBold * 2 : 0 );
+	}
+
 	function applyTextFont( ctx, text, size ) {
 		var family = text.font_family || 'Noto Sans Bengali';
+		var requested = num( text.font_weight, 400 );
+		var weight = resolveWeight( family, requested );
+
 		ctx.font =
 			( text.font_style || 'normal' ) + ' ' +
-			( text.font_weight || 400 ) + ' ' +
+			weight + ' ' +
 			size + 'px "' + family + '", "Noto Sans Bengali", sans-serif';
 		ctx.letterSpacing = num( text.letter_spacing, 0 ) ? num( text.letter_spacing, 0 ) + 'px' : '0px';
+
+		// Emulate the weight the family does not ship, so "Bold" always shows.
+		fauxBold = requested >= 600 && weight < 600 ? Math.max( 0.5, size * 0.028 ) : 0;
 	}
 
 	/**
@@ -1410,11 +1751,90 @@
 	 * @param {Object}                   layer Layer.
 	 * @return {void}
 	 */
+	/**
+	 * What the last paint actually did, per layer.
+	 *
+	 * Diagnostics ("nothing is rendering") need facts, not guesses: this
+	 * records the type size finally used, the lines drawn, whether a block
+	 * overflowed its box, and the colours that could not be parsed. It is reset
+	 * by every `paint()` and exposed on `CPICStudio.lastReport`.
+	 *
+	 * @type {Object}
+	 */
+	var paintReport = { width: 0, height: 0, layers: [], warnings: [], startedAt: 0, ms: 0 };
+
+	function reportLayer( layer, extra ) {
+		var row = {
+			id: layer.id,
+			type: layer.type,
+			x: num( layer.x ),
+			y: num( layer.y ),
+			width: num( layer.width ),
+			height: num( layer.height ),
+			z: num( layer.z ),
+			opacity: num( layer.opacity, 1 ),
+		};
+
+		Object.keys( extra || {} ).forEach( function ( key ) {
+			row[ key ] = extra[ key ];
+		} );
+
+		paintReport.layers.push( row );
+
+		return row;
+	}
+
+	/**
+	 * Surface anything the last live paint could not draw faithfully.
+	 *
+	 * Silent problems are the worst kind: a missing featured image or type that
+	 * had to shrink to nothing should be visible before the user exports.
+	 *
+	 * @return {void}
+	 */
+	function showRenderWarnings() {
+		if ( els.headless || ! els.canvasMeta ) {
+			return;
+		}
+
+		var host = els.canvasMeta.closest( '.cpic-workspace__status' ) || els.canvasMeta;
+		var existing = document.getElementById( 'cpic-render-warnings' );
+
+		if ( ! paintReport.warnings.length ) {
+			if ( existing ) {
+				existing.remove();
+			}
+			els.canvasMeta.classList.remove( 'is-warning' );
+			return;
+		}
+
+		if ( ! existing ) {
+			existing = document.createElement( 'span' );
+			existing.id = 'cpic-render-warnings';
+			existing.className = 'cpic-render-warnings';
+			host.appendChild( existing );
+		}
+
+		existing.textContent = paintReport.warnings.length === 1
+			? paintReport.warnings[ 0 ]
+			: paintReport.warnings.length + ' layers need attention: ' + paintReport.warnings[ paintReport.warnings.length - 1 ];
+
+		existing.title = paintReport.warnings.join( '\n' );
+		els.canvasMeta.classList.add( 'is-warning' );
+	}
+
+	function warnRender( message ) {
+		if ( paintReport.warnings.indexOf( message ) === -1 ) {
+			paintReport.warnings.push( message );
+		}
+	}
+
 	function paintText( ctx, layer ) {
 		var text = layer.text || {};
 		var value = String( text.value || '' ).trim();
 
 		if ( ! value ) {
+			reportLayer( layer, { drawn: false, reason: 'empty' } );
 			return;
 		}
 
@@ -1436,33 +1856,68 @@
 		var lineHeight;
 		var totalHeight;
 
-		applyTextFont( ctx, text, size );
-		lines = wrapText( ctx, value, boxWidth, maxLines );
-		lineHeight = lineHeightFactor * size;
-		totalHeight = lines.length * lineHeight;
+		/**
+		 * How well the text fits its box at the current size.
+		 *
+		 * Both failures matter: a block taller than the box is clipped, and a
+		 * block that needs more lines than `max_lines` is truncated.
+		 *
+		 * @return {Object} { lines, height, overflow, overLines }.
+		 */
+		var fitAt = function ( candidate ) {
+			applyTextFont( ctx, text, candidate );
 
-		// Grow a single line if there is room, then shrink until it fits.
-		if ( text.auto_scale && totalHeight < boxHeight && lines.length === 1 && size < maxSize ) {
-			while ( size < maxSize ) {
-				size += 2;
-				applyTextFont( ctx, text, size );
-				lines = wrapText( ctx, value, boxWidth, maxLines );
-				lineHeight = lineHeightFactor * size;
+			var candidateLines = wrapText( ctx, value, boxWidth, maxLines );
+			var candidateHeight = candidateLines.length * lineHeightFactor * candidate;
+			var widest = 0;
 
-				if ( lines.length * lineHeight > boxHeight ) {
-					size -= 2;
+			candidateLines.forEach( function ( line ) {
+				widest = Math.max( widest, measureLine( ctx, line ) );
+			} );
+
+			return {
+				lines: candidateLines,
+				height: candidateHeight,
+				widest: widest,
+				// A single word wider than the box cannot be wrapped.
+				tooWide: widest > boxWidth + 1 && candidate > minSize,
+				overflow: candidateHeight > boxHeight + 1,
+			};
+		};
+
+		var fit = fitAt( size );
+
+		// Auto-scale: grow while the block still fits its box (width included).
+		// Without a box there is nothing to grow *into*: an auto-height layer
+		// keeps the size it was authored at, otherwise a 23px date would be
+		// blown up to max_font_size and pushed off the canvas.
+		if ( text.auto_scale && boxHeight !== 1e6 && boxHeight !== Infinity && size < maxSize ) {
+			var grown = size;
+
+			for ( var candidateSize = size + 2; candidateSize <= maxSize; candidateSize += 2 ) {
+				var trial = fitAt( candidateSize );
+
+				if ( trial.overflow || trial.tooWide ) {
 					break;
 				}
+
+				grown = candidateSize;
+			}
+
+			if ( grown !== size ) {
+				size = grown;
+				fit = fitAt( size );
 			}
 		}
 
-		while ( size > minSize && lines.length * lineHeightFactor * size > boxHeight ) {
-			size -= 2;
-			applyTextFont( ctx, text, size );
-			lines = wrapText( ctx, value, boxWidth, maxLines );
+		// Shrink until the block fits its box, down to the minimum size.
+		while ( size > minSize && ( fit.overflow || fit.tooWide ) ) {
+			size = Math.max( minSize, size - 2 );
+			fit = fitAt( size );
 		}
 
 		applyTextFont( ctx, text, size );
+		lines = fit.lines;
 		lineHeight = lineHeightFactor * size;
 		totalHeight = lines.length * lineHeight;
 
@@ -1480,19 +1935,38 @@
 			}
 		}
 
-		if ( text.background ) {
+		var plateWidth = boxWidth + paddingX * 2;
+		var plateHeight = totalHeight + paddingY * 2;
+
+		if ( text.background || text.background_gradient_from ) {
 			ctx.save();
-			ctx.fillStyle = text.background;
-			roundedRect( ctx, boxX, innerTop - paddingY, boxWidth + paddingX * 2, totalHeight + paddingY * 2, radius );
+
+			var plate = makeGradient(
+				ctx,
+				{ x: boxX, y: innerTop - paddingY, width: plateWidth, height: plateHeight },
+				text.background_gradient_angle,
+				text.background_gradient_from,
+				text.background_gradient_to
+			);
+
+			// "linear-gradient(...)" typed into a plain colour field degrades to
+			// a single colour rather than to nothing.
+			if ( plate ) {
+				ctx.fillStyle = plate;
+			} else {
+				applyColour( ctx, text.background, 'rgba(0,0,0,0)' );
+			}
+
+			roundedRect( ctx, boxX, innerTop - paddingY, plateWidth, plateHeight, radius );
 			ctx.fill();
 			ctx.restore();
 		}
 
-		if ( num( text.border_width ) > 0 && text.border_color ) {
+		if ( num( text.border_width ) > 0 && isColour( text.border_color ) ) {
 			ctx.save();
 			ctx.strokeStyle = text.border_color;
 			ctx.lineWidth = num( text.border_width );
-			roundedRect( ctx, boxX, innerTop - paddingY, boxWidth + paddingX * 2, totalHeight + paddingY * 2, radius );
+			roundedRect( ctx, boxX, innerTop - paddingY, plateWidth, plateHeight, radius );
 			ctx.stroke();
 			ctx.restore();
 		}
@@ -1512,7 +1986,7 @@
 			ctx.textAlign = 'left';
 		}
 
-		if ( text.shadow_color && ( num( text.shadow_blur ) > 0 || num( text.shadow_offset_x ) || num( text.shadow_offset_y ) ) ) {
+		if ( isColour( text.shadow_color ) && ( num( text.shadow_blur ) > 0 || num( text.shadow_offset_x ) || num( text.shadow_offset_y ) ) ) {
 			ctx.shadowColor = text.shadow_color;
 			ctx.shadowBlur = num( text.shadow_blur );
 			ctx.shadowOffsetX = num( text.shadow_offset_x );
@@ -1522,14 +1996,43 @@
 		lines.forEach( function ( line, index ) {
 			var y = innerTop + index * lineHeight;
 
-			if ( num( text.stroke_width ) > 0 && text.stroke_color ) {
+			// The stroke sits behind the fill so counters stay legible.
+			if ( num( text.stroke_width ) > 0 && isColour( text.stroke_color ) ) {
 				ctx.lineWidth = num( text.stroke_width );
 				ctx.strokeStyle = text.stroke_color;
+				ctx.lineJoin = 'round';
 				ctx.strokeText( line, textX, y );
 			}
 
-			ctx.fillStyle = text.color || '#FFFFFF';
+			applyColour( ctx, text.color, '#FFFFFF' );
+
+			if ( fauxBold ) {
+				ctx.strokeStyle = ctx.fillStyle;
+				ctx.lineWidth = fauxBold * 2;
+				ctx.lineJoin = 'round';
+				ctx.strokeText( line, textX, y );
+			}
+
 			ctx.fillText( line, textX, y );
+		} );
+
+		var overflowY = num( layer.height ) > 0 ? innerTop + totalHeight + paddingY - ( num( layer.y ) + num( layer.height ) ) : 0;
+
+		reportLayer( layer, {
+			drawn: true,
+			lines: lines.length,
+			fontSize: size,
+			requestedSize: num( text.font_size, 40 ),
+			lineHeight: lineHeight,
+			blockHeight: totalHeight,
+			overflowY: Math.max( 0, overflowY ),
+			shrunk: size < num( text.font_size, 40 ),
+			bold: fauxBold > 0,
+			widest: fit.widest || 0,
+			aligned: text.align || 'left',
+			textBoxWidth: boxWidth,
+			bottom: innerTop + totalHeight,
+			truncated: Boolean( text.max_lines && fit.lines.length >= num( text.max_lines ) ),
 		} );
 
 		ctx.restore();
@@ -1559,12 +2062,17 @@
 		}
 
 		if ( kind === 'line' ) {
-			ctx.strokeStyle = shape.fill || '#FFFFFF';
-			ctx.lineWidth = Math.max( 1, height );
-			ctx.lineCap = 'round';
+			// A rule can be defined by thickness or by the box height.
+			var thickness = Math.max( 1, num( shape.stroke_width ) || height || 1 );
+
+			reportLayer( layer, { drawn: true, shapeKind: 'line', thickness: thickness } );
+
+			applyColour( ctx, shape.stroke_color || shape.fill, '#FFFFFF', 'strokeStyle' );
+			ctx.lineWidth = thickness;
+			ctx.lineCap = 'butt';
 			ctx.beginPath();
-			ctx.moveTo( x, y + height / 2 );
-			ctx.lineTo( x + width, y + height / 2 );
+			ctx.moveTo( x, y + Math.max( height, thickness ) / 2 );
+			ctx.lineTo( x + width, y + Math.max( height, thickness ) / 2 );
 			ctx.stroke();
 			ctx.restore();
 			return;
@@ -1579,31 +2087,33 @@
 			roundedRect( ctx, x, y, width, height, num( shape.border_radius ) );
 		}
 
-		if ( shape.gradient_from && shape.gradient_to ) {
-			var angle = ( num( shape.gradient_angle, 90 ) * Math.PI ) / 180;
-			var cx = x + width / 2;
-			var cy = y + height / 2;
-			var len = Math.abs( width * Math.cos( angle ) ) + Math.abs( height * Math.sin( angle ) );
-			var gradient = ctx.createLinearGradient(
-				cx - ( Math.cos( angle ) * len ) / 2,
-				cy - ( Math.sin( angle ) * len ) / 2,
-				cx + ( Math.cos( angle ) * len ) / 2,
-				cy + ( Math.sin( angle ) * len ) / 2
+		var gradient = null;
+
+		if ( shape.gradient_from || shape.gradient_to ) {
+			gradient = makeGradient(
+				ctx,
+				{ x: x, y: y, width: width, height: height },
+				shape.gradient_angle,
+				shape.gradient_from,
+				shape.gradient_to
 			);
-			gradient.addColorStop( 0, shape.gradient_from );
-			gradient.addColorStop( 1, shape.gradient_to );
+		}
+
+		if ( gradient ) {
 			ctx.fillStyle = gradient;
 		} else {
-			ctx.fillStyle = shape.fill || '#FFFFFF';
+			applyColour( ctx, shape.fill, '#FFFFFF' );
 		}
 
 		ctx.fill();
 
-		if ( num( shape.stroke_width ) > 0 && shape.stroke_color ) {
+		if ( num( shape.stroke_width ) > 0 ) {
+			applyColour( ctx, shape.stroke_color, '#FFFFFF', 'strokeStyle' );
 			ctx.lineWidth = num( shape.stroke_width );
-			ctx.strokeStyle = shape.stroke_color;
 			ctx.stroke();
 		}
+
+		reportLayer( layer, { drawn: true, shapeKind: kind, gradient: Boolean( gradient ) } );
 
 		ctx.restore();
 	}
@@ -1618,7 +2128,8 @@
 		var x = num( layer.x );
 		var y = num( layer.y );
 		var width = Math.max( 1, num( layer.width ) );
-		var height = Math.max( 1, num( layer.height ) );
+		// An auto-height logo box has no height until the image is known.
+		var height = num( layer.height ) > 0 ? num( layer.height ) : Math.max( 24, width * 0.4 );
 
 		if ( image.fallback === 'blur' ) {
 			ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
@@ -1635,13 +2146,22 @@
 		roundedRect( ctx, x, y, width, height, num( image.border_radius ) );
 		ctx.fill();
 
-		// A quiet mark so the editor can tell a placeholder from artwork.
-		ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-		ctx.lineWidth = Math.max( 1, width / 300 );
-		ctx.setLineDash( [ 12, 10 ] );
-		roundedRect( ctx, x + 1, y + 1, Math.max( 0, width - 2 ), Math.max( 0, height - 2 ), num( image.border_radius ) );
-		ctx.stroke();
+		// The dashed outline is editor chrome, not artwork: it marks "no image
+		// yet" while you are working, and must never appear in the exported
+		// PNG that gets published.
+		if ( ! els.headless ) {
+			ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+			ctx.lineWidth = Math.max( 1, width / 300 );
+			ctx.setLineDash( [ 12, 10 ] );
+			roundedRect( ctx, x + 1, y + 1, Math.max( 0, width - 2 ), Math.max( 0, height - 2 ), num( image.border_radius ) );
+			ctx.stroke();
+			ctx.setLineDash( [] );
+		}
+
 		ctx.restore();
+
+		reportLayer( layer, { drawn: true, placeholder: true, chrome: ! els.headless } );
+		warnRender( 'Image layer “' + ( layer.name || layer.id ) + '” has no image; a fallback was exported.' );
 	}
 
 	/**
@@ -1668,7 +2188,25 @@
 		var x = num( layer.x );
 		var y = num( layer.y );
 		var width = Math.max( 1, num( layer.width ) );
-		var height = Math.max( 1, num( layer.height ) );
+		// An auto-height box (`natural_ratio`) is sized from the image itself.
+		var height = num( layer.height ) > 0
+			? num( layer.height )
+			: ( cached && cached.__loaded ? width * ( cached.__loaded.height / Math.max( 1, cached.__loaded.width ) ) : width );
+
+		var radius = num( image.border_radius );
+		// A border must not be clipped away by its own clip path.
+		var borderWidth = num( image.border_width );
+		var inset = borderWidth > 0 ? borderWidth / 2 : 0;
+		var stroke = function () {
+			if ( borderWidth > 0 && isColour( image.border_color ) ) {
+				ctx.save();
+				ctx.strokeStyle = image.border_color;
+				ctx.lineWidth = borderWidth;
+				roundedRect( ctx, x + inset, y + inset, Math.max( 0, width - inset * 2 ), Math.max( 0, height - inset * 2 ), Math.max( 0, radius - inset ) );
+				ctx.stroke();
+				ctx.restore();
+			}
+		};
 
 		var draw = function ( loaded ) {
 			if ( ! loaded ) {
@@ -1679,10 +2217,10 @@
 
 			// Re-apply the clip: a promise may resolve after the context state
 			// has been restored by the caller.
-			roundedRect( ctx, x, y, width, height, num( image.border_radius ) );
+			roundedRect( ctx, x, y, width, height, radius );
 			ctx.clip();
 
-			if ( num( image.shadow_blur ) > 0 && image.shadow_color ) {
+			if ( num( image.shadow_blur ) > 0 && isColour( image.shadow_color ) ) {
 				ctx.shadowColor = image.shadow_color;
 				ctx.shadowBlur = num( image.shadow_blur );
 			}
@@ -1721,13 +2259,15 @@
 			} );
 		}
 
-		if ( num( image.border_width ) > 0 && image.border_color ) {
-			ctx.save();
-			ctx.strokeStyle = image.border_color;
-			ctx.lineWidth = num( image.border_width );
-			roundedRect( ctx, x, y, width, height, num( image.border_radius ) );
-			ctx.stroke();
-			ctx.restore();
+		stroke();
+
+		if ( drawn ) {
+			reportLayer( layer, { drawn: true, image: true, fit: image.fit || 'cover', boxHeight: height } );
+		} else {
+			// The image is still loading; in an export this means it never
+			// arrived in time.
+			reportLayer( layer, { drawn: false, reason: 'image-pending' } );
+			warnRender( 'Image layer “' + ( layer.name || layer.id ) + '” had not finished loading when the design was drawn.' );
 		}
 
 		return drawn;
@@ -1765,6 +2305,16 @@
 		await ensureFonts( plan.fonts );
 		await preloadPlanImages( plan );
 
+		paintReport = {
+			width: num( plan.width, canvas.width ),
+			height: num( plan.height, canvas.height ),
+			layers: [],
+			warnings: [],
+			headless: Boolean( els.headless ),
+			startedAt: Date.now(),
+			ms: 0,
+		};
+
 		paintCanvasBackground( ctx, plan );
 
 		var layers = ( plan.layers || [] ).slice().sort( function ( a, b ) {
@@ -1798,14 +2348,22 @@
 			} catch ( error ) {
 				// One broken layer must not blank the whole canvas.
 				window.console && window.console.warn( 'CPIC: layer failed', layer.id, error );
+				reportLayer( layer, { drawn: false, reason: 'error', error: String( error && error.message ) } );
+				warnRender( 'A layer could not be painted: ' + layer.id );
 			}
 
 			ctx.restore();
 		}
 
+		paintReport.ms = Date.now() - paintReport.startedAt;
+
+
+
 		if ( els.canvasMeta ) {
 			els.canvasMeta.textContent = plan.width + ' × ' + plan.height + ' px · ' + state.format;
 		}
+
+		showRenderWarnings();
 	}
 
 	/**
@@ -5682,13 +6240,23 @@
 
 	function buildTypographySection( id, element ) {
 		var families = fontOptions();
-		var weights = [
-			{ value: 400, label: 'Regular (400)' },
-			{ value: 500, label: 'Medium (500)' },
-			{ value: 600, label: 'Semibold (600)' },
-			{ value: 700, label: 'Bold (700)' },
-			{ value: 800, label: 'Extra bold (800)' },
-		];
+		var shipped = fontWeightsFor( element.font_family || 'Noto Sans Bengali' );
+		var weightLabels = {
+			400: 'Regular (400)',
+			500: 'Medium (500)',
+			600: 'Semibold (600)',
+			700: 'Bold (700)',
+			800: 'Extra bold (800)',
+			900: 'Black (900)',
+		};
+		// Offer every weight, but say which ones the family really ships; the
+		// rest are drawn with the painter's own bold, so they always show.
+		var weights = [ 400, 500, 600, 700, 800, 900 ].map( function ( value ) {
+			return {
+				value: value,
+				label: weightLabels[ value ] + ( shipped.indexOf( value ) === -1 && value > 400 ? ' · simulated' : '' ),
+			};
+		} );
 
 		return section(
 			'typography',
@@ -6867,11 +7435,15 @@
 			els.headless = wasHeadless;
 		}
 
+		// The report is ground truth about what was actually drawn: an export
+		// that used fallbacks is not a clean export, so the caller must say so
+		// rather than promise a perfect PNG.
 		return {
 			dataUrl: target.toDataURL( 'image/png' ),
 			width: target.width,
 			height: target.height,
 			name: ( state.templateName || 'design' ).replace( /[^a-z0-9\-_ ]/gi, '' ).trim() || 'design',
+			problems: paintReport.warnings.slice(),
 		};
 	}
 
@@ -6889,7 +7461,12 @@
 			toast( str( 'exporting', 'Preparing the PNG…' ), 'info', { duration: 2000 } );
 			var png = await renderPng();
 			downloadDataUrl( png.dataUrl, png.name + '-' + state.format + '.png' );
-			toast( str( 'exported', 'PNG downloaded' ), 'success' );
+
+			if ( png.problems && png.problems.length ) {
+				toast( png.problems[ 0 ], 'warning', { duration: 7000 } );
+			} else {
+				toast( str( 'exported', 'PNG downloaded' ), 'success' );
+			}
 		} catch ( error ) {
 			toast( error.message || str( 'renderFailed', 'Rendering failed' ), 'error' );
 		}
@@ -6924,6 +7501,10 @@
 			var artifact = result.artifact || {};
 
 			showResult( artifact, result.png );
+
+			if ( result.png.problems && result.png.problems.length ) {
+				toast( result.png.problems[ 0 ], 'warning', { duration: 7000 } );
+			}
 			// Copy only when the server really stored the file.
 			toast(
 				artifact && artifact.id
@@ -8611,6 +9192,14 @@
 			} );
 		},
 		version: CONFIG.version || '',
+		/**
+		 * Ground truth from the last paint: per-layer sizes, overflow and any
+		 * colours that could not be parsed. Diagnostics and the render gates
+		 * read this instead of guessing from the DOM.
+		 */
+		get lastReport() {
+			return paintReport;
+		},
 	};
 
 	if ( document.readyState === 'loading' ) {

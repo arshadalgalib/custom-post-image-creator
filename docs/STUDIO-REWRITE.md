@@ -15,7 +15,7 @@ same painter the export uses, so Bengali shaping, font fallback, image fitting a
 saved PNG cannot drift. No PHP rendering was added, no schema field was invented, no
 element id or endpoint was renamed.
 
-Beyond the visible work, wiring the new gates surfaced **nine real bugs** (section 5) —
+Beyond the visible work, wiring the new gates surfaced **nine real bugs** at the time (section 5), and a later rendering audit added eleven more (see `docs/RENDERING-FIXES.md`) —
 including one where no plan ever reached the canvas and one where every browser render
 would have been rejected by the artifacts endpoint.
 
@@ -26,9 +26,10 @@ would have been rejected by the artifacts endpoint.
 | File | Lines | What it is |
 | --- | ---: | --- |
 | `templates/admin/studio.php` | 587 | App shell + boot payload |
-| `resources/js/studio.js` | 8 621 | The whole editor (vanilla JS, one IIFE, `window.CPICStudio` preserved) |
+| `resources/js/studio.js` | 9 200 | The whole editor (vanilla JS, one IIFE, `window.CPICStudio` preserved) |
 | `resources/css/studio.css` | 2 782 | All styles, scoped under `.cpic-studio`, no CDN, no emoji, inline SVG only |
-| `tools/harness/studio-smoke.mjs` | 919 | **New gate**: drives the real editor script in a DOM (94 checks) |
+| `tools/harness/studio-smoke.mjs` | 977 | **New gate**: drives the real editor script in a DOM (106 checks) |
+| `tools/harness/render-doctor.mjs` | 470 | **New gate**: paints every starter in every format and measures the result |
 | `tools/harness/studio-paint.mjs` | 268 | **New gate**: paints real plans through the studio's painter, inspects pixels |
 | `src/REST/Controllers/ArtifactsController.php` | +6 | Accepts `binary` as well as `data` |
 | `tests/php/run-core.php` | +32 | Regression tests for both payload fields + empty-render rejection |
@@ -142,7 +143,7 @@ cd tools/harness && node verify.mjs
 | PHP suite | **321 passed / 0 failed** (includes the 4 new artifact-payload assertions) |
 | Admin screens (11) | all render, no diagnostics leaked |
 | Canvas render | `out/plan-preview.png` |
-| **Studio smoke** | **94 checks passed** |
+| **Studio smoke** | **106 checks passed** |
 | **Studio paint** | square + story painted, non-blank, opaque |
 
 `studio-smoke.mjs` boots the *real* `studio.js` against the *real* rendered markup (jsdom,

@@ -62,13 +62,23 @@ export function pluginFiles(repoRoot) {
 }
 
 /**
- * Build the PHP script that writes every plugin file into the VM filesystem.
+ * Largest payload written by a single PHP script.
+ *
+ * php-wasm compiles each script with a fixed interpreter stack, and one script
+ * holding every heredoc overflows it once the binary assets grow (a single
+ * extra bundled font was enough). Batching keeps each compilation small.
+ */
+export const WRITE_BATCH_BYTES = 512 * 1024;
+
+/**
+ * Build the PHP scripts that write every plugin file into the VM filesystem.
  *
  * @param {string}   repoRoot Repository root.
  * @param {string[]} files    Absolute file paths.
- * @returns {string} PHP source.
+ * @param {number}   [budget] Bytes of payload per script.
+ * @returns {string[]} PHP sources, in write order.
  */
-export function buildFileWriter(repoRoot, files) {
+export function buildFileWriters(repoRoot, files, budget = WRITE_BATCH_BYTES) {
 	const payloads = files.map((file, index) => {
 		const bytes = readFileSync(file);
 		const binary = BINARY_EXTENSIONS.some((ext) => file.endsWith(ext));
@@ -87,9 +97,31 @@ export function buildFileWriter(repoRoot, files) {
 		}
 	}
 
-	return `<?php
+	const batches = [];
+	let batch = [];
+	let size = 0;
+
+	for (const payload of payloads) {
+		const length = payload.body.length + 256;
+
+		if (batch.length && size + length > budget) {
+			batches.push(batch);
+			batch = [];
+			size = 0;
+		}
+
+		batch.push(payload);
+		size += length;
+	}
+
+	if (batch.length) {
+		batches.push(batch);
+	}
+
+	return batches.map((rows, index) => `<?php
+// Batch ${index + 1} of ${batches.length}.
 $cpic_files = array();
-${payloads
+${rows
 	.map(
 		(p) => `$cpic_files[${JSON.stringify(p.vmPath)}] = <<<'${p.end}'
 ${p.body}
@@ -97,7 +129,7 @@ ${p.end};`
 	)
 	.join('\n')}
 
-$cpic_binary = ${JSON.stringify(payloads.filter((p) => p.binary).map((p) => p.vmPath))};
+$cpic_binary = ${JSON.stringify(rows.filter((p) => p.binary).map((p) => p.vmPath))};
 
 foreach ( $cpic_files as $path => $contents ) {
 	$dir = dirname( $path );
@@ -111,7 +143,19 @@ foreach ( $cpic_files as $path => $contents ) {
 
 	file_put_contents( $path, $contents );
 }
-`;
+`);
+}
+
+/**
+ * Build a single script that writes every plugin file (small payloads only).
+ *
+ * @param {string}   repoRoot Repository root.
+ * @param {string[]} files    Absolute file paths.
+ * @returns {string} PHP source.
+ */
+export function buildFileWriter(repoRoot, files) {
+	const scripts = buildFileWriters(repoRoot, files, Number.MAX_SAFE_INTEGER);
+	return scripts[0];
 }
 
 /**
@@ -157,10 +201,14 @@ export async function createSession() {
  */
 export async function createPluginSession(repoRoot) {
 	const session = await createSession();
-	const [code, output] = await session.run(buildFileWriter(repoRoot, pluginFiles(repoRoot)));
+	const scripts = buildFileWriters(repoRoot, pluginFiles(repoRoot));
 
-	if (code !== 0) {
-		throw new Error(`php-wasm could not write the plugin files:\n${output.slice(-2000)}`);
+	for (const [index, script] of scripts.entries()) {
+		const [code, output] = await session.run(script);
+
+		if (code !== 0) {
+			throw new Error(`php-wasm could not write the plugin files (batch ${index + 1} of ${scripts.length}):\n${output.slice(-2000)}`);
+		}
 	}
 
 	return {

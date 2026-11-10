@@ -28,7 +28,7 @@ mkdirSync(outDir, { recursive: true });
 
 /* ── A real render plan from the real builder ───────────────────── */
 
-for (const file of ['NotoSansBengali-Regular.ttf', 'NotoSerifBengali-Regular.ttf', 'HindSiliguri-Regular.ttf']) {
+for (const file of ['NotoSansBengali-Regular.ttf', 'NotoSerifBengali-Regular.ttf', 'HindSiliguri-Regular.ttf', 'HindSiliguri-SemiBold.ttf']) {
 	try {
 		GlobalFonts.registerFromPath(join(repoRoot, 'fonts', file));
 	} catch (error) {

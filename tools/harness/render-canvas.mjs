@@ -21,7 +21,7 @@ const outFile = process.argv[2] || join(repoRoot, 'tools/harness/out/plan-previe
 // Register the plugin's own Bengali faces so the preview reflects the real
 // font choice (napi-rs does not shape clusters, so this proves the family and
 // metrics, not the conjunct shaping a browser performs).
-for (const file of ['NotoSansBengali-Regular.ttf', 'NotoSerifBengali-Regular.ttf', 'HindSiliguri-Regular.ttf']) {
+for (const file of ['NotoSansBengali-Regular.ttf', 'NotoSerifBengali-Regular.ttf', 'HindSiliguri-Regular.ttf', 'HindSiliguri-SemiBold.ttf']) {
 	try {
 		GlobalFonts.registerFromPath(join(repoRoot, 'fonts', file));
 	} catch (error) {
