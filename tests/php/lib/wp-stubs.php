@@ -905,6 +905,40 @@ function current_time( $type = 'mysql', $gmt = 0 ) {
 }
 
 /**
+ * Convert a GMT datetime to site time (WordPress core helper).
+ *
+ * @param string $date   GMT datetime.
+ * @param string $format Optional format.
+ * @return string
+ */
+function get_date_from_gmt( $date, $format = 'Y-m-d H:i:s' ) {
+	$timestamp = strtotime( (string) $date . ' UTC' );
+
+	if ( false === $timestamp ) {
+		return (string) $date;
+	}
+
+	return gmdate( $format, $timestamp + ( (int) get_option( 'gmt_offset', 0 ) * HOUR_IN_SECONDS ) );
+}
+
+/**
+ * Convert a site-time datetime to GMT.
+ *
+ * @param string $date   Site datetime.
+ * @param string $format Optional format.
+ * @return string
+ */
+function get_gmt_from_date( $date, $format = 'Y-m-d H:i:s' ) {
+	$timestamp = strtotime( (string) $date . ' UTC' );
+
+	if ( false === $timestamp ) {
+		return (string) $date;
+	}
+
+	return gmdate( $format, $timestamp - ( (int) get_option( 'gmt_offset', 0 ) * HOUR_IN_SECONDS ) );
+}
+
+/**
  * Convert a MySQL date using a PHP format.
  *
  * @param string $format Format.

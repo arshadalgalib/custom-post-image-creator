@@ -115,6 +115,14 @@ final class Scheduler {
 		add_action(
 			self::HOOK_QUEUE,
 			function () {
+				/*
+				 * Scheduled posts live in `deliveries`, not in the job table: a run
+				 * created with `schedule_only` sits there until its `scheduled_for`
+				 * passes. Nothing else drains that table, so without this call
+				 * "Schedule" silently posted nothing at the appointed time. Rows
+				 * that are not yet due are skipped by the query itself.
+				 */
+				$this->container->get( 'delivery_manager' )->process_due( 10 );
 				$this->container->get( 'queue' )->run( 'cron' );
 			}
 		);

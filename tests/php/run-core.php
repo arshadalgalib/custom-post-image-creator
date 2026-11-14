@@ -663,7 +663,33 @@ CPIC_Test::ok( isset( $declared['Hind Siliguri'][600] ), 'Hind Siliguri ships a 
 CPIC_Test::ok( ! isset( $declared['Noto Sans Bengali'][700] ), 'No bold weight is declared without a matching file' );
 
 $css = $fonts->css();
-CPIC_Test::ok( 1 === preg_match_all( "/@font-face\{font-family:'Hind Siliguri';font-style:normal;font-weight:600/", $css ), 'The semibold face is emitted in CSS' );
+CPIC_Test::ok(
+	1 === preg_match_all( "/font-family:'Hind Siliguri';font-style:normal;font-weight:500 900;font-display:block;src:url\('[^']*HindSiliguri-SemiBold\.ttf'\)/", $css ),
+	'The semibold face is emitted in CSS'
+);
+
+// Each family must answer every weight with a real face, or the browser
+// synthesises bold again — and two faces must never claim the same weight,
+// or the last one wins for text meant for the first.
+CPIC_Test::ok( 1 === preg_match_all( "/font-family:'Hind Siliguri';font-style:normal;font-weight:100 499;/", $css ), 'The Hind Siliguri regular face owns the regular range' );
+CPIC_Test::ok( 1 === preg_match_all( "/font-family:'Hind Siliguri';font-style:normal;font-weight:500 900;/", $css ), 'The Hind Siliguri semibold face owns the bold range' );
+
+preg_match_all( "/font-family:'Hind Siliguri';font-style:normal;font-weight:(\d+) (\d+);/", $css, $hind_match );
+$hind_ranges = array();
+
+foreach ( $hind_match[1] as $hind_index => $hind_from ) {
+	$hind_ranges[] = array( (int) $hind_from, (int) $hind_match[2][ $hind_index ] );
+}
+
+CPIC_Test::equal( 2, count( $hind_ranges ), 'Hind Siliguri declares two weight ranges' );
+CPIC_Test::ok(
+	isset( $hind_ranges[0], $hind_ranges[1] ) && $hind_ranges[0][1] < $hind_ranges[1][0],
+	'Hind Siliguri faces never overlap',
+	wp_json_encode( $hind_ranges )
+);
+
+CPIC_Test::ok( 1 === preg_match_all( "/font-family:'Noto Sans Bengali';font-style:normal;font-weight:100 900;/", $css ), 'A single-face family answers every weight' );
+CPIC_Test::equal( 4, substr_count( $css, '@font-face' ), 'Exactly one @font-face per bundled file' );
 CPIC_Test::ok( false === strpos( $css, 'HindSiliguri-Regular.ttf', 0 ) || substr_count( $css, 'HindSiliguri-Regular.ttf' ) === 1, 'The regular face is declared exactly once' );
 
 $resolved = $fonts->resolve( 'Siyam Rupali' );
@@ -1370,6 +1396,183 @@ CPIC_Test::equal(
 	'cpic_already_published',
 	isset( $repeat_body['code'] ) ? (string) $repeat_body['code'] : '',
 	'A duplicate publish explains itself'
+);
+
+/* ═══ 25c. Scheduled publishing actually runs ════════════════ */
+
+/*
+ * "Schedule" writes a run with `schedule_only`, which nothing but the cron
+ * hook drains. When that call was missing the UI happily said "scheduled"
+ * and nothing was ever posted, at any time, on any site. This builds the
+ * state a browser-only render leaves behind — a parked delivery plus the PNG
+ * the studio stores a moment later — and drives the registered hook.
+ */
+
+CPIC_Test::suite( 'Scheduled publishing fires from cron' );
+
+CPIC_Test_State::$posts[8123] = cpic_test_make_post(
+	array(
+		'ID'           => 8123,
+		'post_title'   => 'Scheduled post',
+		'post_content' => '<p>Body</p>',
+		'post_excerpt' => 'Excerpt',
+	)
+);
+
+$parked_target   = $plugin->service( 'accounts' )->resolve_targets( array( 'destination_ids' => array( $destination ) ) );
+$parked_dest_id  = ! empty( $parked_target[0]['id'] ) ? (int) $parked_target[0]['id'] : (int) $destination;
+
+// Site time, like every other `current_time( 'mysql' )` row.
+$parked_scheduled = gmdate( 'Y-m-d H:i:s', time() + 3600 + ( (int) get_option( 'gmt_offset', 0 ) * HOUR_IN_SECONDS ) );
+
+$parked_run = $plugin->service( 'deliveries' )->create_run(
+	array(
+		'post_id'        => 8123,
+		'artifact_id'    => 0,
+		'status'         => 'waiting_for_artifact',
+		'scheduled_for'  => $parked_scheduled,
+		'trigger_source' => 'schedule',
+		'created_at'     => current_time( 'mysql' ),
+	)
+);
+
+$parked_id = $plugin->service( 'deliveries' )->create_delivery(
+	array(
+		'run_id'          => $parked_run,
+		'post_id'         => 8123,
+		'destination_id'  => $parked_dest_id,
+		'provider'        => 'facebook',
+		'idempotency_key' => 'run' . $parked_run . '-dst' . $parked_dest_id . '-post8123',
+		'artifact_id'     => 0,
+		'caption'         => 'Scheduled caption',
+		'status'          => 'waiting_for_artifact',
+		'max_attempts'    => 5,
+		'scheduled_for'   => $parked_scheduled,
+		'created_at'      => current_time( 'mysql' ),
+	)
+);
+
+CPIC_Test::ok( $parked_run > 0 && $parked_id > 0, 'A parked scheduled run can be created' );
+
+// The studio's PNG lands just after the run is parked.
+$parked_artifact = $plugin->service( 'artifact_manager' )->store_browser_render(
+	array(
+		'post_id'  => 8123,
+		'format'   => 'square',
+		'document' => $changed_doc,
+		'binary'   => cpic_test_png( 1080, 1080, 3 ),
+	)
+);
+
+CPIC_Test::ok( is_array( $parked_artifact ) && ! empty( $parked_artifact['id'] ), 'The studio stores the image for the parked run' );
+
+$due_before = 0;
+foreach ( (array) $plugin->service( 'deliveries' )->due( 50 ) as $due_row ) {
+	if ( (int) $due_row['id'] === $parked_id ) {
+		$due_before++;
+	}
+}
+CPIC_Test::equal( 0, $due_before, 'A future delivery is not due yet' );
+
+$plugin->service( 'deliveries' )->update(
+	$parked_id,
+	array( 'scheduled_for' => gmdate( 'Y-m-d H:i:s', time() - 60 + ( (int) get_option( 'gmt_offset', 0 ) * HOUR_IN_SECONDS ) ) )
+);
+
+$due_after = 0;
+foreach ( (array) $plugin->service( 'deliveries' )->due( 50 ) as $due_row ) {
+	if ( (int) $due_row['id'] === $parked_id ) {
+		$due_after++;
+	}
+}
+CPIC_Test::equal( 1, $due_after, 'A past delivery is due' );
+
+$plugin->service( 'scheduler' )->register_handlers();
+do_action( 'cpic/cron/queue' );
+
+$after_cron = $plugin->service( 'deliveries' )->find( $parked_id );
+
+CPIC_Test::ok(
+	null !== $after_cron,
+	'The cron hook reached the scheduled delivery',
+	wp_json_encode( $after_cron ? array( 'status' => $after_cron['status'], 'attempts' => (int) $after_cron['attempts'] ) : null )
+);
+
+CPIC_Test::ok(
+	null !== $after_cron && 'waiting_for_artifact' !== (string) $after_cron['status'],
+	'A parked run adopts the stored image and stops waiting',
+	null === $after_cron ? 'no row' : (string) $after_cron['status']
+);
+
+CPIC_Test::ok(
+	null !== $after_cron && (int) $after_cron['artifact_id'] > 0,
+	'The adopted delivery points at a real artifact',
+	null === $after_cron ? 'no row' : 'artifact ' . (int) $after_cron['artifact_id']
+);
+
+/*
+ * `scheduled_for` arrives from the REST layer in UTC but every row stores
+ * site time; comparing the two directly made a run an hour ahead look overdue
+ * on a UTC+6 site (so it posted immediately) and made nothing ever come due
+ * on a negative-offset site.
+ */
+CPIC_Test::equal(
+	'2026-01-01 12:00:00',
+	$plugin->service( 'delivery_manager' )->to_site_time( '2026-01-01 06:00:00' ),
+	'A UTC schedule is converted to site time before it is stored'
+);
+
+$site_offset = (int) get_option( 'gmt_offset', 0 ) * HOUR_IN_SECONDS;
+
+CPIC_Test::ok(
+	$plugin->service( 'delivery_manager' )->is_future( gmdate( 'Y-m-d H:i:s', time() + 7200 + $site_offset ) ),
+	'A schedule two hours ahead is still in the future'
+);
+
+CPIC_Test::ok(
+	! $plugin->service( 'delivery_manager' )->is_future( gmdate( 'Y-m-d H:i:s', time() - 120 + $site_offset ) ),
+	'A schedule two minutes ago is not in the future'
+);
+
+// Rescheduling must keep the wall clock the editor picked.
+CPIC_Test_State::$posts[8124] = cpic_test_make_post(
+	array(
+		'ID'           => 8124,
+		'post_title'   => 'Reschedule me',
+		'post_content' => '<p>Body</p>',
+		'post_excerpt' => 'Excerpt',
+	)
+);
+
+$resched_run = $plugin->service( 'deliveries' )->create_run(
+	array(
+		'post_id'       => 8124,
+		'artifact_id'   => (int) $parked_artifact['id'],
+		'status'        => 'pending',
+		'scheduled_for' => current_time( 'mysql' ),
+		'created_at'    => current_time( 'mysql' ),
+	)
+);
+$resched_id = $plugin->service( 'deliveries' )->create_delivery(
+	array(
+		'run_id'          => $resched_run,
+		'post_id'         => 8124,
+		'destination_id'  => $parked_dest_id,
+		'provider'        => 'facebook',
+		'idempotency_key' => 'run' . $resched_run . '-resched',
+		'artifact_id'     => (int) $parked_artifact['id'],
+		'status'          => 'pending',
+		'created_at'      => current_time( 'mysql' ),
+	)
+);
+
+$picked = gmdate( 'Y-m-d', time() + $site_offset ) . ' 09:30:00';
+$plugin->service( 'calendar' )->reschedule( $resched_id, $picked );
+
+CPIC_Test::equal(
+	$picked,
+	(string) $plugin->service( 'deliveries' )->find( $resched_id )['scheduled_for'],
+	'Rescheduling stores the site-time slot the editor picked'
 );
 
 /* ═══ 26. Campaigns + calendar ═══════════════════════════════ */

@@ -195,16 +195,24 @@ final class CalendarService {
 			return new \WP_Error( 'cpic_already_published', __( 'A published delivery cannot be rescheduled.', 'custom-post-image-creator' ), array( 'status' => 409 ) );
 		}
 
+		/*
+		 * The calendar editor sends a wall-clock string already in site time,
+		 * which is the clock every `scheduled_for` row stores. Keep the slot
+		 * exactly as picked: re-projecting it (as this used to) moved the
+		 * appointment by the site offset, so a 09:30 slot fired at 15:30.
+		 */
 		$timestamp = strtotime( (string) $when );
 
 		if ( false === $timestamp ) {
 			return new \WP_Error( 'cpic_bad_date', __( 'That is not a valid date and time.', 'custom-post-image-creator' ), array( 'status' => 400 ) );
 		}
 
+		$site_time = gmdate( 'Y-m-d H:i:s', $timestamp );
+
 		$this->container->get( 'deliveries' )->update(
 			(int) $delivery_id,
 			array(
-				'scheduled_for' => gmdate( 'Y-m-d H:i:s', $timestamp ),
+				'scheduled_for' => $site_time,
 				'status'        => 'queued',
 				'claimed_at'    => null,
 			)
@@ -214,7 +222,7 @@ final class CalendarService {
 			'delivery.rescheduled',
 			'delivery',
 			(int) $delivery_id,
-			gmdate( 'Y-m-d H:i:s', $timestamp )
+			$site_time
 		);
 
 		return true;

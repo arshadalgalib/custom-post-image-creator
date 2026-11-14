@@ -247,11 +247,43 @@ final class FontManager {
 			if ( empty( $font['available'] ) ) {
 				continue;
 			}
+			/*
+			 * Give every face a *disjoint* weight range.
+			 *
+			 * A browser handed only `font-weight:400` synthesises 600/700
+			 * itself; handed a range it uses the real face across it. But two
+			 * overlapping faces make the last one win for everything, so
+			 * declaring both Hind Siliguri faces `400 600` rendered regular
+			 * text with the semibold file. Each face owns the span up to the
+			 * midpoint of its neighbours; a single-face family owns it all,
+			 * which is why the browser no longer fakes a bold the server
+			 * cannot reproduce.
+			 */
+			$weights = isset( $font['weights'] ) && is_array( $font['weights'] )
+				? array_values( array_unique( array_map( 'intval', $font['weights'] ) ) )
+				: array( (int) $font['weight'] );
+
+			sort( $weights );
+
+			$own   = (int) $font['weight'];
+			$index = array_search( $own, $weights, true );
+			$index = false === $index ? 0 : (int) $index;
+			$last  = count( $weights ) - 1;
+
+			if ( $last <= 0 ) {
+				$weight_css = '100 900';
+			} else {
+				$from = 0 === $index ? 100 : (int) floor( ( $weights[ $index - 1 ] + $own ) / 2 );
+				$to   = $index === $last ? 900 : (int) ceil( ( $own + $weights[ $index + 1 ] ) / 2 ) - 1;
+
+				$weight_css = $from . ' ' . $to;
+			}
+
 			$css .= sprintf(
-				"@font-face{font-family:'%s';font-style:%s;font-weight:%d;font-display:block;src:url('%s') format('%s');}\n",
+				"@font-face{font-family:'%s';font-style:%s;font-weight:%s;font-display:block;src:url('%s') format('%s');}\n",
 				str_replace( array( "'", '\n' ), '', (string) $font['family'] ),
 				str_replace( array( "'", '\n' ), '', (string) $font['style'] ),
-				(int) $font['weight'],
+				$weight_css,
 				esc_url( $font['url'] ),
 				'truetype' === $font['format'] ? 'truetype' : str_replace( array( "'", '\n' ), '', (string) $font['format'] )
 			);

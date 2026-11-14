@@ -173,11 +173,24 @@ final class DeliveryManager {
 			: '';
 
 		// ── Run ──────────────────────────────────────────────────
-		$scheduled_for = isset( $args['scheduled_for'] ) && '' !== $args['scheduled_for'] ? (string) $args['scheduled_for'] : null;
+		/*
+		 * One clock for every comparison.
+		 *
+		 * `scheduled_for` arrives from the REST layer in UTC, while rows store
+		 * `current_time( 'mysql' )` (site time). Comparing the two directly
+		 * made a run scheduled an hour ahead look overdue on a UTC+6 site, so
+		 * it posted immediately — and on a negative-offset site nothing was
+		 * ever due. Everything below speaks site time; convert on the way in.
+		 */
+		$scheduled_for = isset( $args['scheduled_for'] ) && '' !== $args['scheduled_for']
+			? $this->to_site_time( (string) $args['scheduled_for'] )
+			: null;
 
 		if ( ! $scheduled_for && ! empty( $args['schedule_only'] ) ) {
 			$scheduled_for = current_time( 'mysql' );
 		}
+
+		$is_future = $scheduled_for ? $this->is_future( $scheduled_for ) : false;
 
 		$run_id = $this->repo()->create_run(
 			array(
@@ -215,7 +228,7 @@ final class DeliveryManager {
 					'idempotency_key' => $this->idempotency_key( $run_id, $destination_id, $post_id ),
 					'artifact_id'     => $renderer_blocked ? 0 : (int) $artifact['id'],
 					'caption'         => isset( $captions[ $destination_id ] ) ? (string) $captions[ $destination_id ] : '',
-					'status'          => $renderer_blocked ? 'waiting_for_artifact' : ( $scheduled_for && strtotime( $scheduled_for ) > time() ? 'queued' : 'pending' ),
+					'status'          => $renderer_blocked ? 'waiting_for_artifact' : ( $is_future ? 'queued' : 'pending' ),
 					'max_attempts'    => $this->container->get( 'retry' )->max_attempts(),
 					'scheduled_for'   => $scheduled_for,
 					'created_at'      => current_time( 'mysql' ),
@@ -261,7 +274,7 @@ final class DeliveryManager {
 		);
 
 		// Send immediately unless the caller asked to schedule it.
-		if ( empty( $args['schedule_only'] ) && ! $renderer_blocked && ( ! $scheduled_for || strtotime( $scheduled_for ) <= time() ) ) {
+		if ( empty( $args['schedule_only'] ) && ! $renderer_blocked && ! $is_future ) {
 			$result['results'] = $this->process_run( $run_id );
 		}
 
@@ -309,8 +322,20 @@ final class DeliveryManager {
 			return array( 'delivery_id' => $delivery_id, 'status' => 'missing' );
 		}
 
+		/*
+		 * A run created while the render was browser-only is parked here. The
+		 * studio stores the PNG moments later, so instead of refusing forever
+		 * look for a usable artifact for this post and adopt it. Without this,
+		 * "Saved for publishing." was a dead end: nothing ever moved the row.
+		 */
 		if ( 'waiting_for_artifact' === (string) $delivery['status'] ) {
-			return array( 'delivery_id' => $delivery_id, 'status' => 'waiting_for_artifact' );
+			$adopted = $this->adopt_artifact( $delivery );
+
+			if ( ! $adopted ) {
+				return array( 'delivery_id' => $delivery_id, 'status' => 'waiting_for_artifact' );
+			}
+
+			$delivery = $this->repo()->find( $delivery_id );
 		}
 
 		if ( ! $this->repo()->claim( $delivery_id ) ) {
@@ -464,6 +489,82 @@ final class DeliveryManager {
 		);
 
 		return $this->outcome( $delivery_id, $terminal ? 'failed' : 'queued', $code );
+	}
+
+	/**
+	 * Convert a UTC datetime into the site's timezone.
+	 *
+	 * @param string $utc Datetime in UTC.
+	 * @return string Site-time datetime.
+	 */
+	public function to_site_time( $utc ) {
+		$timestamp = strtotime( (string) $utc . ' UTC' );
+
+		if ( false === $timestamp ) {
+			return (string) $utc;
+		}
+
+		return (string) get_date_from_gmt( gmdate( 'Y-m-d H:i:s', $timestamp ) );
+	}
+
+	/**
+	 * Whether a site-time datetime is still in the future.
+	 *
+	 * @param string $datetime Site-time datetime.
+	 * @return bool
+	 */
+	public function is_future( $datetime ) {
+		$timestamp = strtotime( get_gmt_from_date( (string) $datetime ) . ' UTC' );
+
+		if ( false === $timestamp ) {
+			return false;
+		}
+
+		return $timestamp > time();
+	}
+
+	/**
+	 * Attach the newest usable artifact to a parked delivery.
+	 *
+	 * @param array<string,mixed> $delivery Delivery row.
+	 * @return bool True when the row is no longer waiting.
+	 */
+	private function adopt_artifact( array $delivery ) {
+		$post_id = (int) $delivery['post_id'];
+		$manager = $this->container->get( 'artifact_manager' );
+		$wanted  = $this->container->get( 'publishers' )->get( (string) $delivery['provider'] );
+
+		$artifact = null;
+
+		if ( $wanted && '' !== $wanted->preferred_format() ) {
+			$artifact = $manager->latest( $post_id, $wanted->preferred_format() );
+		}
+
+		if ( ! $artifact ) {
+			$artifact = $manager->latest( $post_id );
+		}
+
+		if ( ! $artifact || empty( $artifact['exists'] ) ) {
+			return false;
+		}
+
+		$this->repo()->update(
+			(int) $delivery['id'],
+			array(
+				'artifact_id' => (int) $artifact['id'],
+				'status'      => 'pending',
+				'claimed_at'  => null,
+			)
+		);
+
+		$this->container->get( 'logger' )->info(
+			'publish',
+			/* translators: %d: artifact id */
+			sprintf( __( 'Resumed a parked delivery with artifact %d.', 'custom-post-image-creator' ), (int) $artifact['id'] ),
+			array( 'delivery_id' => (int) $delivery['id'] )
+		);
+
+		return true;
 	}
 
 	/**
