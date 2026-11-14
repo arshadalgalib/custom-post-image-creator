@@ -15,7 +15,10 @@ const repoRoot = (process.argv[2] || join(here, '..', '..')).replace(/\/+$/, '')
 const session = await createPluginSession(repoRoot);
 
 // No opening tag: the session prelude already opened PHP.
-const script = `require '${VM_ROOT}/tests/php/bootstrap.php';
+const script = `error_reporting( E_ALL );
+ini_set( 'display_errors', '1' );
+
+require '${VM_ROOT}/tests/php/bootstrap.php';
 
 $GLOBALS['cpic'] = cpic_test_boot();
 $cpic = $GLOBALS['cpic'];
@@ -105,7 +108,8 @@ foreach ( $screens as $view => $method ) {
 	if ( false !== strpos( $html, 'screen is unavailable' ) ) {
 		$problems[] = 'view file missing';
 	}
-	foreach ( array( 'Warning:', 'Notice:', 'Deprecated:', 'Fatal error', 'Undefined' ) as $needle ) {
+	// Every diagnostic, not just the ones we happened to think of first.
+	foreach ( array( 'Warning:', 'Notice:', 'Deprecated:', 'Fatal error', 'Parse error', 'Undefined', 'Uncaught', 'Trying to access array offset' ) as $needle ) {
 		if ( false !== strpos( $html, $needle ) ) {
 			$problems[] = 'PHP diagnostic leaked: ' . $needle;
 		}
@@ -121,6 +125,72 @@ foreach ( $screens as $view => $method ) {
 }
 
 echo $failures ? 'SCREENS FAILED ' . $failures . "\\n" : "ALL SCREENS RENDERED\\n";
+
+/*
+ * The seeded screens above are the happy path. A brand-new activation has no
+ * accounts, no campaigns, no artifacts and no upcoming work, which is exactly
+ * where "Undefined array key" and divide-by-zero notices live. This pass wipes
+ * those rows and renders every screen again.
+ */
+if ( 0 === $failures ) {
+	global $wpdb;
+
+	foreach ( array( 'deliveries', 'delivery_runs', 'artifacts', 'campaigns', 'destinations' ) as $cpic_table ) {
+		$cpic_name = \\CPIC\\Database\\Schema::table( $cpic_table );
+
+		if ( $cpic_name ) {
+			$wpdb->query( "DELETE FROM {$cpic_name}" );
+		}
+	}
+
+	$fresh_failures = 0;
+
+	foreach ( $screens as $view => $method ) {
+		$level = ob_get_level();
+		ob_start();
+
+		try {
+			$admin->{$method}();
+			$html = ob_get_clean();
+		} catch ( \\Throwable $e ) {
+			while ( ob_get_level() > $level ) {
+				ob_end_clean();
+			}
+			$fresh_failures++;
+			echo 'FRESH FAIL ' . $view . ' :: ' . get_class( $e ) . ': ' . $e->getMessage() . "\\n";
+			continue;
+		}
+
+		$problems = array();
+
+		if ( strlen( $html ) < 400 ) {
+			$problems[] = 'suspiciously short (' . strlen( $html ) . ' bytes)';
+		}
+		if ( false !== strpos( $html, 'screen is unavailable' ) ) {
+			$problems[] = 'view file missing';
+		}
+		foreach ( array( 'Warning:', 'Notice:', 'Deprecated:', 'Fatal error', 'Parse error', 'Undefined', 'Uncaught', 'Trying to access array offset' ) as $needle ) {
+			if ( false !== strpos( $html, $needle ) ) {
+				$problems[] = 'PHP diagnostic leaked: ' . $needle;
+			}
+		}
+
+		if ( $problems ) {
+			$fresh_failures++;
+			echo 'FRESH FAIL ' . $view . ' :: ' . implode( ', ', $problems ) . "\\n";
+			continue;
+		}
+
+		echo 'FRESH OK ' . $view . ' (' . strlen( $html ) . " bytes)\\n";
+	}
+
+	if ( $fresh_failures ) {
+		echo 'FRESH INSTALL SCREENS FAILED ' . $fresh_failures . "\\n";
+		exit( 1 );
+	}
+
+	echo "FRESH INSTALL SCREENS RENDERED\\n";
+}
 `;
 
 const [exitCode, output] = await session.run(script);
