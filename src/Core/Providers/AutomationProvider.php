@@ -68,6 +68,23 @@ final class AutomationProvider extends ServiceProvider {
 			3
 		);
 
+		/*
+		 * A run parked because the image had to come from the browser resumes
+		 * the moment the studio stores that image, instead of waiting for the
+		 * next cron tick. Without this the publish dialog said "saved for
+		 * publishing" and nothing happened until a background sweep.
+		 */
+		$c->get( 'events' )->add_listener(
+			'artifact.created',
+			static function ( $payload ) use ( $c ) {
+				if ( empty( $payload['post_id'] ) ) {
+					return;
+				}
+
+				$c->get( 'delivery_manager' )->resume_parked( (int) $payload['post_id'] );
+			}
+		);
+
 		// A post deleted while queued must not fire later.
 		add_action(
 			'before_delete_post',

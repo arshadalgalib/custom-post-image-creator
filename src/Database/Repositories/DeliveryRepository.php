@@ -387,6 +387,29 @@ final class DeliveryRepository extends Repository {
 	}
 
 	/**
+	 * Ids of deliveries parked waiting for an image for this post.
+	 *
+	 * @param int $post_id Post id.
+	 * @return array<int,int>
+	 */
+	public function waiting_for_artifact_ids( $post_id ) {
+		global $wpdb;
+
+		$table = $this->table();
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared
+		$ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT id FROM {$table} WHERE post_id = %d AND status = 'waiting_for_artifact' AND scheduled_for <= %s",
+				(int) $post_id,
+				$this->now()
+			)
+		);
+
+		return array_map( 'intval', is_array( $ids ) ? $ids : array() );
+	}
+
+	/**
 	 * Recover deliveries stuck in processing.
 	 *
 	 * @param int $minutes Stale threshold in minutes.

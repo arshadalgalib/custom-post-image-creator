@@ -524,6 +524,40 @@ final class DeliveryManager {
 	}
 
 	/**
+	 * Send every delivery that was waiting for an image of this post.
+	 *
+	 * The studio stores its PNG right after publishing reports
+	 * `waiting_for_artifact`; resuming on the spot means the user sees the post
+	 * go out instead of waiting for the next cron tick.
+	 *
+	 * @param int $post_id Post id.
+	 * @return int Number of deliveries resumed.
+	 */
+	public function resume_parked( $post_id ) {
+		$ids = $this->repo()->waiting_for_artifact_ids( (int) $post_id );
+
+		$runs = array();
+
+		foreach ( $ids as $delivery_id ) {
+			$row = $this->repo()->find( (int) $delivery_id );
+
+			if ( ! $row ) {
+				continue;
+			}
+
+			$runs[ (int) $row['run_id'] ] = true;
+
+			$this->dispatch_delivery( (int) $delivery_id );
+		}
+
+		foreach ( array_keys( $runs ) as $run_id ) {
+			$this->finalise_run( (int) $run_id );
+		}
+
+		return count( $ids );
+	}
+
+	/**
 	 * Attach the newest usable artifact to a parked delivery.
 	 *
 	 * @param array<string,mixed> $delivery Delivery row.

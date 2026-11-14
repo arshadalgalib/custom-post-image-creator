@@ -1547,6 +1547,70 @@ CPIC_Test::ok(
 );
 
 /*
+ * The studio stores its PNG right after publish reports `waiting_for_artifact`.
+ * Resuming then means the user sees the post go out; waiting for the next cron
+ * tick made the dialog's "saved for publishing" feel like a failure.
+ */
+CPIC_Test_State::$posts[8125] = cpic_test_make_post(
+	array(
+		'ID'           => 8125,
+		'post_title'   => 'Immediate resume',
+		'post_content' => '<p>Body</p>',
+		'post_excerpt' => 'Excerpt',
+	)
+);
+
+$resume_run = $plugin->service( 'deliveries' )->create_run(
+	array(
+		'post_id'       => 8125,
+		'artifact_id'   => 0,
+		'status'        => 'waiting_for_artifact',
+		'scheduled_for' => current_time( 'mysql' ),
+		'created_at'    => current_time( 'mysql' ),
+	)
+);
+$resume_id = $plugin->service( 'deliveries' )->create_delivery(
+	array(
+		'run_id'          => $resume_run,
+		'post_id'         => 8125,
+		'destination_id'  => $parked_dest_id,
+		'provider'        => 'facebook',
+		'idempotency_key' => 'run' . $resume_run . '-resume',
+		'artifact_id'     => 0,
+		'status'          => 'waiting_for_artifact',
+		'scheduled_for'   => current_time( 'mysql' ),
+		'created_at'      => current_time( 'mysql' ),
+	)
+);
+
+CPIC_Test::equal(
+	array( $resume_id ),
+	$plugin->service( 'deliveries' )->waiting_for_artifact_ids( 8125 ),
+	'Parked deliveries for a post are found by post id'
+);
+
+// Storing the image is what the studio does just before publishing finishes.
+$plugin->service( 'artifact_manager' )->store_browser_render(
+	array(
+		'post_id'  => 8125,
+		'format'   => 'square',
+		'document' => $changed_doc,
+		'binary'   => cpic_test_png( 1080, 1080, 11 ),
+	)
+);
+
+$resumed            = $plugin->service( 'deliveries' )->find( $resume_id );
+$resumed_artifact   = $resumed ? (int) $resumed['artifact_id'] : 0;
+
+CPIC_Test::equal( $resume_id, $resumed ? (int) $resumed['id'] : 0, 'The resumed delivery still exists' );
+CPIC_Test::ok( $resumed_artifact > 0, 'Storing the image unparks the delivery without a cron tick', 'artifact ' . $resumed_artifact );
+CPIC_Test::ok(
+	$resumed && ! in_array( (string) $resumed['status'], array( 'waiting_for_artifact' ), true ),
+	'The delivery left the waiting state immediately',
+	$resumed ? (string) $resumed['status'] : 'no row'
+);
+
+/*
  * `scheduled_for` arrives from the REST layer in UTC but every row stores
  * site time; comparing the two directly made a run an hour ahead look overdue
  * on a UTC+6 site (so it posted immediately) and made nothing ever come due
