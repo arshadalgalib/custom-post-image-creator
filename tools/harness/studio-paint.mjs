@@ -166,7 +166,12 @@ class StubImage {
 window.Image = StubImage;
 
 window.CPIC = { version: 'test', restPath: '/cpic/v1/', restRoot: 'https://example.test/wp-json/', nonce: 'n', formats: {}, strings: {}, can: {} };
-window.fetch = async () => ({ ok: false, status: 500, json: async () => ({ message: 'offline' }) });
+window.fetch = async () => ({
+	ok: false,
+	status: 500,
+	text: async () => JSON.stringify( { message: 'offline' } ),
+	json: async () => ( { message: 'offline' } ),
+});
 
 window.eval(studioJs + '\n//# sourceURL=studio.js');
 
@@ -203,7 +208,12 @@ for (const [format, entry_] of Object.entries(plans)) {
 
 	const dataUrl = await (async () => {
 		const previous = window.fetch;
-		window.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, data: plan }) });
+		window.fetch = async () => ({
+			ok: true,
+			status: 200,
+			text: async () => JSON.stringify( { ok: true, data: plan } ),
+			json: async () => ( { ok: true, data: plan } ),
+		});
 		try {
 			return await studio.export(entry_.document, { format });
 		} finally {

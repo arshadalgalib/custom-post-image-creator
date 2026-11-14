@@ -262,6 +262,14 @@ final class Admin {
 			'publishedStored' => __( 'Image saved — nothing was posted.', 'custom-post-image-creator' ),
 			'publishedWaiting' => __( 'Saved for publishing.', 'custom-post-image-creator' ),
 			'bindFailed'    => __( 'One part of the editor did not start. Reloading the page usually fixes it.', 'custom-post-image-creator' ),
+			'requestFailed' => __( 'Request failed', 'custom-post-image-creator' ),
+			'tooLargeResponse' => __( 'The server refused the request because it was too large (HTTP 413). Raise post_max_size and upload_max_filesize, then try again.', 'custom-post-image-creator' ),
+			'sessionExpired' => __( 'WordPress refused the request. Your session may have expired — reload the page and try again.', 'custom-post-image-creator' ),
+			'serverError'   => __( 'The server returned an error page instead of a response. Check the debug log; a PHP error usually explains this.', 'custom-post-image-creator' ),
+			'imageTooLarge' => __( 'The image is too large for this server to accept. Ask your host to raise the upload limit, or pick a smaller format.', 'custom-post-image-creator' ),
+			'stageRender'   => __( '(while drawing the image)', 'custom-post-image-creator' ),
+			'stageUpload'   => __( '(while storing the image on the server)', 'custom-post-image-creator' ),
+			'publishFailed' => __( 'Publishing failed', 'custom-post-image-creator' ),
 		);
 	}
 

@@ -410,6 +410,22 @@
 
 	/* ── REST client ──────────────────────────────────────────────── */
 
+	/**
+	 * Whether a response body is a document rather than data.
+	 *
+	 * A PHP fatal, a proxy error page and a WordPress login redirect all arrive
+	 * as HTML; recognising them lets the error message say "the server returned
+	 * an error page" instead of pretending the JSON was valid.
+	 *
+	 * @param {string} body Raw body.
+	 * @return {boolean} True when it looks like markup.
+	 */
+	function looksLikeHtml( body ) {
+		var head = String( body || '' ).replace( /^\s+/, '' ).slice( 0, 200 ).toLowerCase();
+
+		return head.indexOf( '<!doctype' ) === 0 || head.indexOf( '<html' ) === 0 || head.indexOf( '<?php' ) === 0 || head.indexOf( '<br' ) === 0 || head.indexOf( '<b>' ) === 0;
+	}
+
 	async function api( path, options ) {
 		options = options || {};
 
@@ -467,18 +483,53 @@
 			window.clearTimeout( timer );
 		}
 
-		var payload = null;
+		/*
+		 * Read the body as text first.
+		 *
+		 * WordPress answers a PHP fatal error, a 413 from the web server, or an
+		 * expired login with HTML, and `response.json()` then throws — leaving
+		 * nothing to report. That is how a failed upload came to be described
+		 * as "Rendering failed": the error branch had no message of its own.
+		 */
+		var raw = '';
 		try {
-			payload = await response.json();
+			raw = await response.text();
 		} catch ( error ) {
-			payload = null;
+			raw = '';
+		}
+
+		var payload = null;
+		if ( raw ) {
+			try {
+				payload = JSON.parse( raw );
+			} catch ( error ) {
+				payload = null;
+			}
 		}
 
 		if ( ! response.ok ) {
-			var message = payload && payload.message ? payload.message : str( 'renderFailed', 'Request failed' );
-			var failure = new Error( message );
+			var endpoint = path.replace( /^.*\//, '' );
+			var detail = payload && payload.message ? payload.message : '';
+
+			if ( ! detail ) {
+				// No JSON. Say which endpoint failed, with what status, and
+				// name the two causes we can actually recognise.
+				if ( 413 === response.status ) {
+					detail = str( 'tooLargeResponse', 'The server refused the request because it was too large (HTTP 413). Raise post_max_size and upload_max_filesize, then try again.' );
+				} else if ( 403 === response.status || 401 === response.status ) {
+					detail = str( 'sessionExpired', 'WordPress refused the request (HTTP ' + response.status + '). Your session may have expired — reload the page and try again.' );
+				} else if ( looksLikeHtml( raw ) ) {
+					detail = str( 'serverError', 'The server returned an error page instead of a response (HTTP ' + response.status + '). Check the debug log; a PHP error usually explains this.' );
+				} else {
+					detail = str( 'requestFailed', 'Request failed' ) + ' (HTTP ' + response.status + ' ' + endpoint + ')';
+				}
+			}
+
+			var failure = new Error( detail );
 			failure.code = payload && payload.code ? payload.code : 'http_' + response.status;
 			failure.status = response.status;
+			failure.endpoint = endpoint;
+			failure.body = raw.slice( 0, 400 );
 			throw failure;
 		}
 
@@ -488,6 +539,8 @@
 			var unreadable = new Error( str( 'badResponse', 'The server sent a response the editor could not read. Reload the page and try again.' ) );
 			unreadable.code = 'bad_payload';
 			unreadable.status = response.status;
+			unreadable.endpoint = path.replace( /^.*\//, '' );
+			unreadable.body = raw.slice( 0, 400 );
 			throw unreadable;
 		}
 
@@ -7498,19 +7551,47 @@
 	async function storeArtifact( options ) {
 		options = options || {};
 
-		var png = await renderPng();
+		/*
+		 * Separate the two steps so the failure names the one that broke.
+		 * Both used to surface as a bare "Rendering failed", which sent people
+		 * looking for a painter bug when the upload endpoint had refused the
+		 * image (a permissions or body-size problem, often).
+		 */
+		var png;
 
-		var payload = await api( CONFIG.restPath + 'artifacts', {
-			method: 'POST',
-			body: {
-				post_id: state.postId || 0,
-				template_id: state.templateId || 0,
-				format: state.format,
-				document: serializeDocument(),
-				binary: png.dataUrl,
-				attach: !! options.attach,
-			},
-		} );
+		try {
+			png = await renderPng();
+		} catch ( error ) {
+			error.storeStage = 'render';
+			throw error;
+		}
+
+		var payload;
+
+		try {
+			payload = await api( CONFIG.restPath + 'artifacts', {
+				method: 'POST',
+				body: {
+					post_id: state.postId || 0,
+					template_id: state.templateId || 0,
+					format: state.format,
+					document: serializeDocument(),
+					binary: png.dataUrl,
+					attach: !! options.attach,
+				},
+			} );
+		} catch ( error ) {
+			error.storeStage = 'upload';
+
+			// A PNG data URL is sent as JSON, so a host with a small
+			// post_max_size answers 413 (or an empty 200) rather than storing.
+			// Say so instead of blaming the renderer.
+			if ( error.code === 'http_413' || error.status === 413 ) {
+				error.message = str( 'imageTooLarge', 'The image is too large for this server to accept. Ask your host to raise the upload limit, or pick a smaller format.' );
+			}
+
+			throw error;
+		}
 
 		return {
 			artifact: payload && payload.data ? payload.data : payload,
@@ -7796,11 +7877,36 @@
 								'warning'
 							);
 						} catch ( error ) {
+							/*
+							 * Say which step broke. A bare "Rendering failed"
+							 * from the upload step hid every permission and
+							 * body-size refusal behind a painter bug that did
+							 * not exist.
+							 */
+							var stage = error && error.storeStage ? ' ' + str(
+								error.storeStage === 'render' ? 'stageRender' : 'stageUpload',
+								error.storeStage === 'render' ? '(while drawing the image)' : '(while storing the image on the server)'
+							) : '';
+
+							var reason = ( error && error.message ) || str( 'publishFailed', 'Publishing failed' );
+
 							clear( progress );
 							progress.appendChild( iconNode( 'warning', 16 ) );
-							progress.appendChild( el( 'span', { text: error.message || str( 'publishFailed', 'Publishing failed' ) } ) );
-							toast( error.message || str( 'publishFailed', 'Publishing failed' ), 'error' );
+							progress.appendChild( el( 'span', { text: reason + stage } ) );
+							toast( reason + stage, 'error' );
 							state.lastPublishFailed = true;
+
+							// Keep the technical cause reachable: the toast is
+							// transient and users send us the console.
+							if ( window.console && window.console.error ) {
+								window.console.error( '[cpic] publish failed', {
+									stage: error && error.storeStage ? error.storeStage : 'publish',
+									code: error && error.code ? error.code : '',
+									status: error && error.status ? error.status : 0,
+									message: reason,
+									error: error,
+								} );
+							}
 						} finally {
 							if ( button ) {
 								button.disabled = false;
@@ -9256,6 +9362,24 @@
 		export: exportDocument,
 		paint: paint,
 		state: state,
+		/**
+		 * Render in this browser and store the result, exactly as the Publish
+		 * dialog does. Exposed so a failure can be reproduced and inspected
+		 * without driving the dialog by hand — the stage and status on the
+		 * rejected error are the whole diagnosis.
+		 *
+		 * @param {Object} options { attach, postId, templateId, format }.
+		 * @return {Promise<{artifact: Object, png: Object}>} Result.
+		 */
+		storeArtifact: function ( options ) {
+			if ( options && options.postId !== undefined ) {
+				state.postId = options.postId;
+			}
+			if ( options && options.format ) {
+				state.format = options.format;
+			}
+			return storeArtifact( options || {} );
+		},
 		rerender: function ( document_, options ) {
 			options = options || {};
 			if ( document_ ) {

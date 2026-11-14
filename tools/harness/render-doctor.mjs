@@ -156,7 +156,14 @@ window.CPIC = {
 	fonts: fontRows,
 	can: {},
 };
-window.fetch = async () => ({ ok: false, status: 500, json: async () => ({}) });
+// A real Response offers both readers; the studio prefers text() so a
+// non-JSON error page still yields a message.
+window.fetch = async () => ({
+	ok: false,
+	status: 500,
+	text: async () => JSON.stringify( {} ),
+	json: async () => ( {} ),
+});
 
 // A real photograph stand-in: every image layer gets this, so an exported
 // placeholder is a genuine fault rather than a missing fixture.
@@ -228,7 +235,12 @@ for (const [name, entry] of Object.entries(plans)) {
 	const height = Number(plan.height) || 1080;
 
 	const previous = window.fetch;
-	window.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, data: plan }) });
+	window.fetch = async () => ({
+		ok: true,
+		status: 200,
+		text: async () => JSON.stringify( { ok: true, data: plan } ),
+		json: async () => ( { ok: true, data: plan } ),
+	});
 
 	let dataUrl = '';
 	try {

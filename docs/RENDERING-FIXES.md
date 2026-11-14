@@ -376,6 +376,54 @@ overload, WordPress's `edit_post` → `edit_posts`/`edit_others_posts` meta-capa
 mapping, and a `current_user_can()` that accepts extra arguments. Without these,
 handler tests either could not run or refused for the wrong reason.
 
+## Fifth pass
+
+### "Rendering failed" on a design that had drawn perfectly
+
+The studio reported a bare **Rendering failed** — in the publish dialog and in a
+toast — for an upload the server had refused. Nothing was wrong with the
+painter: the design's canvas was on screen and its fonts had loaded.
+
+`api()` read every response with `response.json()`. When the body was not JSON —
+a web-server 413 for an oversized POST, a PHP fatal rendered as HTML, an expired
+login redirecting to `wp-login.php` — the parse threw, the payload became `null`,
+and the error branch fell back to the `renderFailed` string. That label is shown
+verbatim, so a rejected upload arrived at the user as a renderer bug.
+
+The request layer now reads the body as text and parses it itself. A failed
+request reports what actually happened: the endpoint, the HTTP status, and one
+of three recognisable causes (too large / session expired / the server returned
+an error page), with the raw body kept on `error.body` for the console. The
+panel that says `str( 'requestFailed', 'Request failed' )` no longer borrows the
+renderer's wording.
+
+`storeArtifact()` also tags the step it failed on (`error.storeStage`), so the
+publish dialog can say **while drawing the image** or **while storing the image
+on the server**, and it rewrites a 413 into advice about `post_max_size`. The
+dialog logs `{stage, code, status, message}` to the console before it shows the
+toast, because the toast is transient and the console is what gets sent to us.
+
+### The smoke harness was hiding the whole class
+
+`studio-smoke.mjs` passed `strings: {}`, so every `str( key, fallback )` used its
+inline default. An error branch whose fallback was the *wrong sentence* looked
+perfect there and showed the translated one on the real site. It now reads the
+real table straight out of `Admin::strings()`.
+
+Its fetch mock — and the ones in `studio-paint.mjs` and `render-doctor.mjs` —
+implemented only `json()`. That is not a `Response`, so the moment the studio
+started calling `text()` every request in those suites looked unreadable. All
+three now mirror both readers.
+
+`CPICStudio.storeArtifact()` is exported so the upload path can be exercised
+directly instead of through a dialog, which is what let these three assertions
+land: a refused upload rejects, names its stage, and never reads "Rendering
+failed".
+
+Verified by reverting all three fixes together: the tests then print
+`Rendering failed | Rendering failed` — the screenshot above — and three checks
+fail.
+
 ## Verification
 
 ```
@@ -386,7 +434,7 @@ cd tools/harness && node verify.mjs
 PHP test suite                     418 assertions, 0 failures
 Admin screens (seeded)             ALL SCREENS RENDERED
 Admin screens (fresh install)      FRESH INSTALL SCREENS RENDERED
-Studio smoke (editor JS)           120 checks, 0 failures
+Studio smoke (editor JS)           124 checks, 0 failures
 Studio paint (editor canvas)       STUDIO PAINT PASSED
 Render doctor (every starter)      26 plans, 0 faults
                                    RENDER DOCTOR PASSED

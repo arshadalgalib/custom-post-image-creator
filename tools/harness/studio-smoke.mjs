@@ -140,6 +140,27 @@ Object.defineProperty(window, 'localStorage', {
 	},
 });
 
+/*
+ * Use the real string table from Admin::strings().
+ *
+ * The harness used to pass `strings: {}`, so every `str( key, fallback )` fell
+ * back to its inline default. That hid a whole class of bug: an error branch
+ * whose fallback was the wrong sentence still looked fine here while the real
+ * site showed the translated one.
+ */
+function readStringTable() {
+	const source = readFileSync( join( repoRoot, 'src/Admin/Admin.php' ), 'utf8' );
+	const table = {};
+	const pattern = /'([a-zA-Z]+)'\s*=>\s*__\(\s*'((?:[^'\\]|\\.)*)'/g;
+	let match;
+
+	while ( ( match = pattern.exec( source ) ) !== null ) {
+		table[ match[ 1 ] ] = match[ 2 ].replace( /\\'/g, "'" );
+	}
+
+	return table;
+}
+
 window.CPIC = {
 	version: 'test',
 	restPath: '/cpic/v1/',
@@ -149,7 +170,7 @@ window.CPIC = {
 	postId: 501,
 	formats: {},
 	fontUrl: 'https://example.test/fonts/',
-	strings: {},
+	strings: readStringTable(),
 	can: {},
 };
 
@@ -246,7 +267,18 @@ window.fetch = async (url, options = {}) => {
 	const method = options.method || 'GET';
 	requests.push({ method, url: target, body: options.body ? JSON.parse(options.body) : null });
 
-	const ok = (data) => ({ ok: true, status: 200, json: async () => ({ ok: true, data }) });
+	/*
+	 * Mirror a real Response: both `text()` and `json()` exist. The studio now
+	 * reads the body as text first (so a non-JSON error page still yields a
+	 * usable message), and a mock that only offered `json()` made every request
+	 * look unreadable.
+	 */
+	const json = (data) => {
+		const body = JSON.stringify(data);
+		return { ok: true, status: 200, text: async () => body, json: async () => ({ ok: true, data }) };
+	};
+
+	const ok = (data) => json(data);
 
 	if (target.includes('/render/plan')) {
 		const body = options.body ? JSON.parse(options.body) : {};
@@ -1165,8 +1197,61 @@ check('a stalled request aborts instead of hanging', aborted > 0, String(aborted
 const stallText = newToasts().join(' ');
 check('a timeout is reported in plain language', /did not respond in time|connection/i.test(stallText), stallText.slice(0, 120));
 
+/*
+ * A failed upload must never be described as a rendering failure.
+ *
+ * The publish dialog prints `error.message`, and every error branch used to
+ * fall back to the `renderFailed` string — "Rendering failed" — even when the
+ * request had been refused outright and nothing was ever painted. That sent
+ * people hunting a renderer bug instead of a rejected upload.
+ */
+window.fetch = async ( url, options ) => {
+	const target = String( url );
+
+	// The plan still succeeds: only the artifact upload is refused.
+	if ( target.includes( '/render/plan' ) ) {
+		return json( planFor( JSON.parse( ( options && options.body ) || '{}' ).document || {}, 'square' ) );
+	}
+
+	return {
+		ok: false,
+		status: 413,
+		text: async () => '<html><body><h1>Request Entity Too Large</h1></body></html>',
+		json: async () => { throw new Error( 'not json' ); },
+	};
+};
+
+await studio.rerender( state().document, {} );
+await sleep( 150 );
+
+const uploadError = await studio.storeArtifact( { postId: 501, format: 'square' } )
+	.then( () => null )
+	.catch( ( error ) => error );
+await sleep( 200 );
+
+const uploadText = String( uploadError && uploadError.message );
+
+check( 'a refused upload rejects instead of resolving', !!uploadError );
+check( 'a refused upload names the stage that failed', !!uploadError && uploadError.storeStage === 'upload', uploadError && uploadError.storeStage );
+check(
+	'a refused upload is not reported as a rendering failure',
+	!/^\s*Rendering failed\s*$/.test( String( uploadError && uploadError.message ) ) &&
+		!/rendering failed/i.test( uploadText ),
+	( uploadError && uploadError.message ) + ' | ' + uploadText.slice( 0, 120 )
+);
+check(
+	'a refused upload explains that it was too large for the server',
+	/413|too large|upload limit/i.test( String( ( uploadError && uploadError.message ) || '' ) + uploadText ),
+	( ( uploadError && uploadError.message ) || uploadText ).slice( 0, 160 )
+);
+
 // A 200 carrying an unreadable body is a failure, not a success.
-window.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error('not json'); } });
+window.fetch = async () => ({
+	ok: true,
+	status: 200,
+	text: async () => '<html><body>not json</body></html>',
+	json: async () => { throw new Error('not json'); },
+});
 await studio.rerender(state().document, {});
 await sleep(150);
 const badPayloadText = newToasts().join(' ');
