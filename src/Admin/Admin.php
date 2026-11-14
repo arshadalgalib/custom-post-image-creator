@@ -650,7 +650,58 @@ final class Admin {
 				admin_url( 'admin.php' )
 			)
 		);
-		exit;
+
+		if ( ! defined( 'CPIC_TEST_ALLOW_EXIT' ) ) {
+			exit;
+		}
+
+		return;
+	}
+
+	/**
+	 * Map a publish result onto the queue notice that describes it.
+	 *
+	 * @param array<string,mixed> $result Value returned by DeliveryManager::publish_post().
+	 * @return string One of 'published', 'scheduled', 'queued', 'publishing' or 'failed'.
+	 */
+	private function publish_outcome_notice( array $result ) {
+		if ( ! empty( $result['waiting_render'] ) ) {
+			return 'queued';
+		}
+
+		if ( ! empty( $result['scheduled_for'] ) && empty( $result['results'] ) ) {
+			return 'scheduled';
+		}
+
+		if ( ! isset( $result['results'] ) ) {
+			// Created but not dispatched in this request: the queue will run it.
+			return 'queued';
+		}
+
+		$statuses = array();
+
+		foreach ( (array) $result['results'] as $row ) {
+			if ( is_array( $row ) ) {
+				$statuses[] = isset( $row['status'] ) ? (string) $row['status'] : '';
+			}
+		}
+
+		if ( array() === $statuses ) {
+			return 'queued';
+		}
+
+		if ( in_array( 'published', $statuses, true ) ) {
+			// A mixed run is still a real send; the queue lists the rest.
+			return 'published';
+		}
+
+		foreach ( array( 'queued', 'pending', 'waiting_for_artifact', 'retrying' ) as $waiting ) {
+			if ( in_array( $waiting, $statuses, true ) ) {
+				return 'queued';
+			}
+		}
+
+		return 'failed';
 	}
 
 	/**
@@ -682,11 +733,20 @@ final class Admin {
 			)
 		);
 
+		/*
+		 * Only claim "published" when a destination actually confirmed it.
+		 *
+		 * A run parked on `waiting_for_artifact` has not sent anything yet, and
+		 * a run whose every dispatch failed has sent nothing either. Both used
+		 * to land here as a bare non-WP_Error and were reported as "The post
+		 * was sent to its destinations." — the same misleading success the
+		 * studio showed before it learned to read per-delivery outcomes.
+		 */
 		if ( is_wp_error( $result ) ) {
 			set_transient( 'cpic_admin_error_' . get_current_user_id(), $result->get_error_message(), 60 );
 			$status = 'failed';
 		} else {
-			$status = 'published';
+			$status = $this->publish_outcome_notice( (array) $result );
 		}
 
 		wp_safe_redirect(
@@ -698,7 +758,12 @@ final class Admin {
 				admin_url( 'admin.php' )
 			)
 		);
-		exit;
+
+		if ( ! defined( 'CPIC_TEST_ALLOW_EXIT' ) ) {
+			exit;
+		}
+
+		return;
 	}
 
 	/**
@@ -738,7 +803,18 @@ final class Admin {
 		}
 
 		wp_safe_redirect( add_query_arg( array( 'page' => $page, 'cpic_notice' => $notice ), admin_url( 'admin.php' ) ) );
-		exit;
+
+		/*
+		 * `exit` is what a real request does, but it also ends the test process
+		 * (and, under php-wasm, silently poisons the interpreter for the next
+		 * script). The harness defines CPIC_TEST_ALLOW_EXIT so the handler can
+		 * return and its redirect + side effects can be asserted.
+		 */
+		if ( ! defined( 'CPIC_TEST_ALLOW_EXIT' ) ) {
+			exit;
+		}
+
+		return;
 	}
 
 	/**
@@ -773,21 +849,31 @@ final class Admin {
 			}
 		}
 
+		if ( '' === trim( (string) ( isset( $data['name'] ) ? $data['name'] : '' ) ) ) {
+			$this->back_to( 'cpic-brands', 'error', __( 'A brand kit needs a name.', 'custom-post-image-creator' ) );
+			return;
+		}
+
 		$repo = $this->container->get( 'brands' );
 
 		if ( $id > 0 ) {
 			if ( ! $repo->find( $id ) ) {
 				$this->back_to( 'cpic-brands', 'error', __( 'That brand kit no longer exists.', 'custom-post-image-creator' ) );
+				return;
 			}
 			$repo->update( $id, $data );
 		} else {
 			$created = $repo->create( $data );
 			if ( ! $created ) {
-				$this->back_to( 'cpic-brands', 'error', __( 'The brand kit could not be created. Check that the name is unique.', 'custom-post-image-creator' ) );
+				// Names may repeat (the slug is what stays unique), so the old
+				// "check that the name is unique" advice sent people in circles.
+				$this->back_to( 'cpic-brands', 'error', __( 'The brand kit could not be created. Please try again.', 'custom-post-image-creator' ) );
+				return;
 			}
 		}
 
 		$this->back_to( 'cpic-brands', 'saved' );
+		return;
 	}
 
 	/**
@@ -805,12 +891,14 @@ final class Admin {
 
 		if ( ! $repo->find( $id ) ) {
 			$this->back_to( 'cpic-brands', 'error', __( 'That brand kit no longer exists.', 'custom-post-image-creator' ) );
+			return;
 		}
 
 		$repo->clear_default();
 		$repo->update( $id, array( 'is_default' => 1 ) );
 
 		$this->back_to( 'cpic-brands', 'saved' );
+		return;
 	}
 
 	/**
@@ -857,9 +945,11 @@ final class Admin {
 
 		if ( is_wp_error( $result ) ) {
 			$this->back_to( 'cpic-accounts', 'error', $result->get_error_message() );
+			return;
 		}
 
 		$this->back_to( 'cpic-accounts', 'saved' );
+		return;
 	}
 
 	/**
@@ -888,9 +978,11 @@ final class Admin {
 				break;
 			default:
 				$this->back_to( 'cpic-accounts', 'error', __( 'Unknown action.', 'custom-post-image-creator' ) );
+				return;
 		}
 
 		$this->back_to( 'cpic-accounts', 'saved' );
+		return;
 	}
 
 	/**
@@ -917,9 +1009,11 @@ final class Admin {
 
 		if ( is_wp_error( $result ) ) {
 			$this->back_to( 'cpic-campaigns', 'error', $result->get_error_message() );
+			return;
 		}
 
 		$this->back_to( 'cpic-campaigns', 'saved' );
+		return;
 	}
 
 	/**
@@ -959,9 +1053,11 @@ final class Admin {
 
 		if ( is_wp_error( $result ) ) {
 			$this->back_to( 'cpic-campaigns', 'error', $result->get_error_message() );
+			return;
 		}
 
 		$this->back_to( 'cpic-campaigns', 'saved' );
+		return;
 	}
 
 	/**
@@ -1000,6 +1096,7 @@ final class Admin {
 		$result = $settings->bulk_set( $values );
 
 		$this->back_to( 'cpic-settings', empty( $result['errors'] ) ? 'saved' : 'error', empty( $result['errors'] ) ? '' : implode( ' ', $result['errors'] ) );
+		return;
 	}
 
 	/**
@@ -1021,9 +1118,11 @@ final class Admin {
 
 		if ( isset( $steps['schema']['error'] ) ) {
 			$this->back_to( 'cpic-diagnostics', 'error', (string) $steps['schema']['error'] );
+			return;
 		}
 
 		$this->back_to( 'cpic-diagnostics', 'repaired' );
+		return;
 	}
 
 	/**
@@ -1133,7 +1232,10 @@ final class Admin {
 		</body>
 		</html>
 		<?php
-		exit;
+
+		if ( ! defined( 'CPIC_TEST_ALLOW_EXIT' ) ) {
+			exit;
+		}
 	}
 
 	/**
@@ -1196,7 +1298,10 @@ final class Admin {
 		</body>
 		</html>
 		<?php
-		exit;
+
+		if ( ! defined( 'CPIC_TEST_ALLOW_EXIT' ) ) {
+			exit;
+		}
 	}
 
 	/**
@@ -1227,8 +1332,10 @@ final class Admin {
 
 		if ( ! empty( $result['errors'] ) ) {
 			$this->back_to( 'cpic-accounts', 'error', implode( ' ', $result['errors'] ) );
+			return;
 		}
 		$this->back_to( 'cpic-accounts', 'saved' );
+		return;
 	}
 
 	/**
@@ -1261,6 +1368,7 @@ final class Admin {
 		}
 
 		$this->back_to( 'cpic-accounts', 'saved' );
+		return;
 	}
 
 	/**
@@ -1297,6 +1405,7 @@ final class Admin {
 			$this->container->get( 'accounts' )->delete( (int) $row['id'] );
 		}
 		$this->back_to( 'cpic-accounts', 'disconnected' );
+		return;
 	}
 
 	/**
@@ -1318,6 +1427,7 @@ final class Admin {
 
 		if ( '' === $bot_token ) {
 			$this->back_to( 'cpic-accounts', 'error', __( 'Bot Token is missing.', 'custom-post-image-creator' ) );
+			return;
 		}
 
 		// Minimal getMe check.
@@ -1325,15 +1435,18 @@ final class Admin {
 		$response = wp_remote_get( $url, array( 'timeout' => 15 ) );
 		if ( is_wp_error( $response ) ) {
 			$this->back_to( 'cpic-accounts', 'error', $response->get_error_message() );
+			return;
 		}
 		$code = (int) wp_remote_retrieve_response_code( $response );
 		$body = json_decode( (string) wp_remote_retrieve_body( $response ), true );
 		if ( 200 !== $code || empty( $body['ok'] ) ) {
 			$msg = isset( $body['description'] ) ? (string) $body['description'] : __( 'Telegram test failed.', 'custom-post-image-creator' );
 			$this->back_to( 'cpic-accounts', 'error', $msg );
+			return;
 		}
 
 		$this->back_to( 'cpic-accounts', 'tested' );
+		return;
 	}
 
 	private function render_oauth_success( $count ) {
@@ -1362,6 +1475,9 @@ final class Admin {
 		</body>
 		</html>
 		<?php
-		exit;
+
+		if ( ! defined( 'CPIC_TEST_ALLOW_EXIT' ) ) {
+			exit;
+		}
 	}
 }

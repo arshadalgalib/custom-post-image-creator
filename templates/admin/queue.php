@@ -45,6 +45,10 @@ require __DIR__ . '/_header.php';
 
 	<?php if ( 'published' === $cpic_notice ) : ?>
 		<div class="notice notice-success inline"><p><?php esc_html_e( 'The post was sent to its destinations.', 'custom-post-image-creator' ); ?></p></div>
+	<?php elseif ( 'queued' === $cpic_notice ) : ?>
+		<div class="notice notice-info inline"><p><?php esc_html_e( 'The run was queued but nothing has been sent yet. It appears below with its current status.', 'custom-post-image-creator' ); ?></p></div>
+	<?php elseif ( 'scheduled' === $cpic_notice ) : ?>
+		<div class="notice notice-info inline"><p><?php esc_html_e( 'The run was scheduled. Nothing is sent until its scheduled time.', 'custom-post-image-creator' ); ?></p></div>
 	<?php elseif ( 'failed' === $cpic_notice ) : ?>
 		<div class="notice notice-error inline"><p><?php esc_html_e( 'Publishing could not start.', 'custom-post-image-creator' ); ?></p></div>
 	<?php endif; ?>

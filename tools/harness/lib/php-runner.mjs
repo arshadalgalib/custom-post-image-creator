@@ -176,10 +176,16 @@ export async function createSession() {
 		buffer += String(event.detail[0]);
 	});
 
+	let dead = false;
+
 	return {
 		async run(code) {
 			buffer = '';
 			let exitCode = 0;
+
+			if (dead) {
+				return [255, `\n[session] this PHP session ended itself with exit() and cannot be reused\n`];
+			}
 
 			try {
 				exitCode = await php.run(code);
@@ -187,9 +193,35 @@ export async function createSession() {
 				return [255, `${buffer}\n[fatal] ${error?.message || error}\n`];
 			}
 
+			/*
+			 * php-wasm does not tear the interpreter down when a script calls
+			 * exit(); the *next* script silently produces no output at all and
+			 * reports success. An admin-post handler always ends in exit(), so
+			 * a suite that drives one used to see an empty string and pass.
+			 * Detect it: a run that emits nothing where output was expected is
+			 * reported as a dead session instead of a silent empty result.
+			 */
+			/*
+			 * Only a top-level `exit`/`die` invalidates the interpreter. The
+			 * file-writer scripts embed plugin sources in heredocs, and those
+			 * contain plenty of `exit;` statements that never run.
+			 */
+			const stripped = code.replace(/<<<'[^']*'\n[\s\S]*?\n[^\n]*;[ \t]*\n/g, '');
+			const tail = stripped.slice(-400);
+
+			if (/^\s*(exit|die)\b[\s\S]*$/m.test(tail) && /(exit|die)\s*(;|\()/.test(tail)) {
+				dead = true;
+			}
+
 			return [exitCode, buffer];
 		},
 		async dispose() {},
+		revive() {
+			dead = false;
+		},
+		isDead() {
+			return dead;
+		},
 	};
 }
 

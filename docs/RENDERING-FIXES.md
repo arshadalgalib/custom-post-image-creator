@@ -307,6 +307,75 @@ Typing "abc" into Batch Size saved `0`, which stops the queue dead; Time Budget
 stored value instead of coercing, and both the admin form and the REST
 controller surface it.
 
+## Fourth pass
+
+A whole-plugin sweep with `E_ALL` on, driving every service and every admin-post
+handler through real requests. The first pass had never actually run a handler:
+the stubs were missing `check_admin_referer()`, so every POST died before it
+touched anything.
+
+### A parked publish was reported as "sent to its destinations"
+
+`Admin::handle_publish_now()` set `$status = 'published'` for *any* non-`WP_Error`
+result. A run parked on `waiting_for_artifact` — the normal outcome on a
+browser-only host — has not sent anything, yet the queue screen printed "The post
+was sent to its destinations." A run whose every dispatch failed read the same.
+The handler now derives the notice from the result (`waiting_render`, an empty
+`results` set, the per-delivery statuses) and the queue screen has separate
+`queued` and `scheduled` notices that never claim a send.
+
+### One status click produced two redirects
+
+`handle_account_status()` and `handle_campaign_status()` called `back_to()` from
+their error branch and then fell through to the success `back_to()`. `back_to()`
+ends the request, so production never saw it — but the moment the handlers became
+testable the double redirect appeared, and any future refactor that removed the
+`exit` would have shown two flashes with the last one winning. All 26 `back_to()`
+calls now end their handler explicitly.
+
+### Edits that ignored the plugin's own capability
+
+`EditorIntegration::handle_metabox_save()` gated on `edit_post` alone, so a role
+holding "edit others' posts" but not `cpic_publish` could drive it, while the
+sibling `handle_publish_now()` refused exactly that user. It now checks both.
+
+### Unassigning a post answered `200 false`
+
+`CampaignManager::unassign_post()` returned a bare `false` for three different
+conditions — no such campaign, no such assignment, or a failed write — and the
+REST layer wrapped that in `200`. It now mirrors `assign_post()` with
+`cpic_campaign_missing` (404), `cpic_post_missing` (400) and `cpic_not_assigned`
+(404), and emits `campaign.post_unassigned`.
+
+### Delivery outcomes dropped the provider's message
+
+`DeliveryManager::outcome()` kept only the generic `explain()` advice and threw
+away the code whenever the current attempt happened to succeed, so a row that had
+failed and then recovered could not say what went wrong. It now prefers the
+provider's own `last_error` and falls back to the stored `error_code`.
+
+### Test-suite gates that were quietly dead
+
+Two existing assertions could never fail, which is how the defects above stayed
+invisible:
+
+- the round-trip suite looked for `deliveries[0]['delivery_id']`, but delivery
+  rows are keyed `id` — so the whole "mark it published, then refuse a duplicate"
+  block was skipped;
+- that same block wrote `updated_at` to the `deliveries` table, which has no such
+  column, so once it did run it failed on the write rather than on the behaviour.
+
+Both are fixed, and `tools/harness/lib/php-runner.mjs` now refuses to reuse a
+php-wasm session after a script called `exit()` — previously the next script
+produced no output at all and still reported success.
+
+### Stubs that had to grow up with the suite
+
+`check_admin_referer()`, `language_attributes()`, `wp_die()`'s integer-status
+overload, WordPress's `edit_post` → `edit_posts`/`edit_others_posts` meta-capability
+mapping, and a `current_user_can()` that accepts extra arguments. Without these,
+handler tests either could not run or refused for the wrong reason.
+
 ## Verification
 
 ```
@@ -314,7 +383,7 @@ cd tools/harness && node verify.mjs
 ```
 
 ```
-PHP test suite                     366 assertions, 0 failures
+PHP test suite                     418 assertions, 0 failures
 Admin screens (seeded)             ALL SCREENS RENDERED
 Admin screens (fresh install)      FRESH INSTALL SCREENS RENDERED
 Studio smoke (editor JS)           120 checks, 0 failures

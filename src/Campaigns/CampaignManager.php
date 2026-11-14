@@ -266,12 +266,39 @@ final class CampaignManager {
 	/**
 	 * Remove a post from a campaign.
 	 *
+	 * `false` here used to mean three different things — no such campaign, no
+	 * such assignment, or a write that failed — and REST reported every one of
+	 * them as `200 false`. Mirror assign_post() instead: refuse with a code and
+	 * a status the client can act on.
+	 *
 	 * @param int $campaign_id Campaign id.
 	 * @param int $post_id     Post id.
-	 * @return bool
+	 * @return bool|\WP_Error
 	 */
 	public function unassign_post( $campaign_id, $post_id ) {
-		return (bool) $this->repo()->unassign_post( (int) $campaign_id, (int) $post_id );
+		$campaign_id = (int) $campaign_id;
+		$post_id     = (int) $post_id;
+
+		if ( ! $this->repo()->find( $campaign_id ) ) {
+			return new \WP_Error( 'cpic_campaign_missing', __( 'Campaign not found.', 'custom-post-image-creator' ), array( 'status' => 404 ) );
+		}
+
+		if ( $post_id <= 0 ) {
+			return new \WP_Error( 'cpic_post_missing', __( 'A post is required.', 'custom-post-image-creator' ), array( 'status' => 400 ) );
+		}
+
+		$removed = (bool) $this->repo()->unassign_post( $campaign_id, $post_id );
+
+		if ( ! $removed ) {
+			return new \WP_Error( 'cpic_not_assigned', __( 'That post is not in this campaign.', 'custom-post-image-creator' ), array( 'status' => 404 ) );
+		}
+
+		$this->container->get( 'events' )->dispatch(
+			'campaign.post_unassigned',
+			array( 'campaign_id' => $campaign_id, 'post_id' => $post_id )
+		);
+
+		return true;
 	}
 
 	/**

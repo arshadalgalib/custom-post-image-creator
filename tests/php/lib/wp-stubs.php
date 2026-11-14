@@ -121,6 +121,13 @@ final class CPIC_Test_State {
 	public static $post_meta = array();
 
 	/**
+	 * Last wp_die() call, so a handler's refusal can be asserted on.
+	 *
+	 * @var array{message:string,status:int}|null
+	 */
+	public static $wp_die = null;
+
+	/**
 	 * Terms by id.
 	 *
 	 * @var array<int,array<string,mixed>>
@@ -515,8 +522,30 @@ function get_current_user_id() {
  * @param string $cap Capability.
  * @return bool
  */
-function current_user_can( $cap ) {
+function current_user_can( $cap, ...$args ) {
 	$cap = (string) $cap;
+
+	/*
+	 * WordPress maps the per-post meta capabilities onto primitive ones:
+	 * editing your own post needs edit_posts, someone else's needs
+	 * edit_others_posts. Without this mapping `current_user_can( 'edit_post',
+	 * $id )` was always false in the suite, so every permission-gated handler
+	 * refused before doing anything and looked "correct" for the wrong reason.
+	 */
+	if ( in_array( $cap, array( 'edit_post', 'edit_page' ), true ) ) {
+		$post_id = isset( $args[0] ) ? (int) $args[0] : 0;
+		$post    = $post_id && isset( CPIC_Test_State::$posts[ $post_id ] ) ? CPIC_Test_State::$posts[ $post_id ] : null;
+
+		if ( ! $post ) {
+			return false;
+		}
+
+		if ( (int) $post->post_author === get_current_user_id() ) {
+			return current_user_can( 'edit_posts' );
+		}
+
+		return current_user_can( 'edit_others_posts' );
+	}
 
 	if ( isset( CPIC_Test_State::$capabilities[ $cap ] ) ) {
 		return (bool) CPIC_Test_State::$capabilities[ $cap ];
@@ -1372,6 +1401,46 @@ function check_ajax_referer( $action = -1, $field = false, $die = true ) {
 	return wp_verify_nonce( $nonce, $action );
 }
 
+/**
+ * Verify an admin-post referer (WordPress core helper).
+ *
+ * Without this, every admin POST handler died on an undefined function the
+ * moment a test touched it — which is exactly why none of them were tested.
+ *
+ * @param string|int $action Action name (or -1 for the default nonce).
+ * @return int|false 1 or 2 on success, false on failure.
+ */
+function check_admin_referer( $action = -1, $query_arg = '_wpnonce' ) {
+	$nonce = isset( $_REQUEST[ $query_arg ] ) ? $_REQUEST[ $query_arg ] : '';
+
+	if ( '' === $nonce && isset( $_REQUEST['_wpnonce'] ) ) {
+		$nonce = $_REQUEST['_wpnonce'];
+	}
+
+	$verified = wp_verify_nonce( $nonce, $action );
+
+	if ( ! $verified ) {
+		CPIC_Test_State::$wp_die = array(
+			'message' => __( 'That request could not be verified. Reload the post and try again.', 'custom-post-image-creator' ),
+			'status'  => 403,
+		);
+
+		throw new RuntimeException( 'wp_die: That request could not be verified. Reload the post and try again.' );
+	}
+
+	return $verified;
+}
+
+/**
+ * Language attributes (used by the OAuth popup template).
+ *
+ * @param string $doctype Doctype.
+ * @return void
+ */
+function language_attributes( $doctype = 'html' ) {
+	echo 'lang="en-US"';
+}
+
 /* ─── REST ──────────────────────────────────────────────────────── */
 
 /**
@@ -1564,7 +1633,25 @@ function wp_send_json_error( $data = null, $status = 200 ) {
  * @param string $message Message.
  * @return void
  */
-function wp_die( $message = '' ) {
+function wp_die( $message = '', $title = '', $args = array() ) {
+	/*
+	 * WordPress accepts the response code in either place:
+	 *   wp_die( $msg, $title, array( 'response' => 403 ) )
+	 *   wp_die( $msg, 403 )
+	 * Handlers use the second form, so a stub that only read $args['response']
+	 * silently reported 500 for every refusal and hid the real status.
+	 */
+	if ( is_int( $title ) ) {
+		$status = $title;
+	} else {
+		$status = is_array( $args ) && isset( $args['response'] ) ? (int) $args['response'] : 500;
+	}
+
+	CPIC_Test_State::$wp_die = array(
+		'message' => is_string( $message ) ? $message : 'error',
+		'status'  => $status,
+	);
+
 	throw new RuntimeException( 'wp_die: ' . ( is_string( $message ) ? $message : 'error' ) );
 }
 
@@ -1963,6 +2050,18 @@ function wp_nonce_field( $action = -1, $name = '_wpnonce', $referer = true, $dis
 	return $field;
 }
 
+/**
+ * Redirect stub.
+ *
+ * In a real request the handler then calls `exit`, which would kill the whole
+ * test run (and, under php-wasm, silently poison the session). Handlers guard
+ * their own `exit` behind CPIC_TEST_ALLOW_EXIT, so nothing here needs to stop
+ * execution: the redirect is recorded and the caller unwinds normally.
+ *
+ * @param string $location Location.
+ * @param int    $status   Status.
+ * @return bool
+ */
 function wp_safe_redirect( $location, $status = 302 ) {
 	CPIC_Test_State::$redirects[] = (string) $location;
 	return true;

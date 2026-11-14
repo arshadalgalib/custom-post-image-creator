@@ -829,6 +829,14 @@ final class DeliveryManager {
 	private function outcome( $delivery_id, $status, $code ) {
 		$row = $this->repo()->find( (int) $delivery_id );
 
+		/*
+		 * `$code` is the outcome of *this* attempt, so it is empty on success.
+		 * A delivery that failed earlier and then succeeded still carries the
+		 * last error code in its row; fall back to it so the row keeps the
+		 * explanation the UI shows next to the retry button.
+		 */
+		$code = '' !== (string) $code ? (string) $code : ( $row ? (string) $row['error_code'] : '' );
+
 		return array(
 			'delivery_id'    => (int) $delivery_id,
 			'status'         => $status,
@@ -836,8 +844,12 @@ final class DeliveryManager {
 			'destination_id' => $row ? (int) $row['destination_id'] : 0,
 			'remote_id'      => $row ? (string) $row['remote_id'] : '',
 			'remote_url'     => $row ? (string) $row['remote_url'] : '',
-			'error_code'     => (string) $code,
-			'error_message'  => $code ? $this->container->get( 'retry' )->explain( $code ) : '',
+			'error_code'     => $code,
+			// The provider's own message is more useful than a generic hint
+			// when it exists; explain() turns a bare code into advice.
+			'error_message'  => $row && '' !== (string) $row['last_error']
+				? (string) $row['last_error']
+				: ( '' !== $code ? (string) $this->container->get( 'retry' )->explain( $code ) : '' ),
 			'attempts'       => $row ? (int) $row['attempts'] : 0,
 		);
 	}

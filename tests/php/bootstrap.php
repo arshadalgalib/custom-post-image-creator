@@ -16,6 +16,16 @@ if ( ! defined( 'CPIC_TEST_ROOT' ) ) {
 	define( 'CPIC_TEST_ROOT', $cpic_root );
 }
 
+/*
+ * Admin-post handlers end in `exit`, which under php-wasm silently poisons
+ * the interpreter for every later script in the session. The suite runs under
+ * this flag so a handler returns instead, and its redirect plus side effects
+ * can be asserted; production runs never define it, so nothing changes there.
+ */
+if ( ! defined( 'CPIC_TEST_ALLOW_EXIT' ) ) {
+	define( 'CPIC_TEST_ALLOW_EXIT', true );
+}
+
 // WordPress stubs + SQLite $wpdb.
 require_once __DIR__ . '/lib/wp-stubs.php';
 require_once __DIR__ . '/lib/class-test-wpdb.php';

@@ -1405,14 +1405,20 @@ CPIC_Test::ok( ! in_array( $queued_status, array( 'failed', 'error' ), true ), '
  * publish only *queues* the delivery, so mark it confirmed the way the worker
  * would, then ask again.
  */
-if ( ! empty( $publish_data['deliveries'][0]['delivery_id'] ) ) {
-	$delivery_id = (int) $publish_data['deliveries'][0]['delivery_id'];
+/*
+ * Delivery rows are keyed by `id` (that is what the repository returns). The
+ * old lookup used `delivery_id`, which never matched, so this assertion was
+ * quietly skipped and the duplicate-publish check below was never really
+ * exercised against a published row.
+ */
+if ( ! empty( $publish_data['deliveries'][0]['id'] ) ) {
+	$delivery_id = (int) $publish_data['deliveries'][0]['id'];
+	// The deliveries table has no updated_at column (only runs, jobs and the
+	// repositories that write it), so writing one made the update throw and
+	// the assertion below fail for the wrong reason.
 	$updated     = $plugin->service( 'deliveries' )->update(
 		$delivery_id,
-		array(
-			'status'     => 'published',
-			'updated_at' => current_time( 'mysql' ),
-		)
+		array( 'status' => 'published' )
 	);
 	$row_now     = $plugin->service( 'deliveries' )->find( $delivery_id );
 
@@ -1420,6 +1426,52 @@ if ( ! empty( $publish_data['deliveries'][0]['delivery_id'] ) ) {
 		$updated && isset( $row_now['status'] ) && 'published' === $row_now['status'],
 		'The delivery can be marked published',
 		wp_json_encode( $row_now ? array( 'status' => $row_now['status'], 'destination_id' => $row_now['destination_id'] ) : null )
+	);
+}
+
+/*
+ * A delivery outcome must carry the provider's own message.
+ *
+ * `outcome()` used to return only the generic explain() advice, and to drop
+ * the code entirely when this attempt succeeded. Both left the queue with a
+ * row that could not say what the provider had actually complained about.
+ */
+if ( ! empty( $delivery_id ) ) {
+	$outcome_method = new \ReflectionMethod( $plugin->service( 'delivery_manager' ), 'outcome' );
+	$outcome_method->setAccessible( true );
+
+	$failed_row = $plugin->service( 'deliveries' )->update(
+		$delivery_id,
+		array(
+			'status'     => 'queued',
+			'error_code' => 'fb_invalid_token',
+			'last_error' => 'Facebook said: Error validating access token.',
+		)
+	);
+
+	$outcome = $outcome_method->invoke( $plugin->service( 'delivery_manager' ), $delivery_id, 'queued', '' );
+
+	CPIC_Test::ok( is_array( $outcome ), 'A delivery outcome is produced' );
+
+	CPIC_Test::equal(
+		'Facebook said: Error validating access token.',
+		isset( $outcome['error_message'] ) ? (string) $outcome['error_message'] : '',
+		'The outcome keeps the provider message, not only the generic hint'
+	);
+	CPIC_Test::equal(
+		'fb_invalid_token',
+		isset( $outcome['error_code'] ) ? (string) $outcome['error_code'] : '',
+		'The outcome falls back to the stored error code'
+	);
+
+	// Leave the row as the published row the duplicate test above expects.
+	$plugin->service( 'deliveries' )->update(
+		$delivery_id,
+		array(
+			'status'     => 'published',
+			'error_code' => '',
+			'last_error' => '',
+		)
 	);
 }
 
@@ -1793,6 +1845,421 @@ add_action(
 );
 $events->dispatch( 'test.event', array( 'value' => 43 ) );
 CPIC_Test::ok( $wp_hook_fired, 'Events are bridged onto WordPress hooks' );
+
+/* ═══ 31. Admin request handlers ═════════════════════════════ */
+
+CPIC_Test::suite( 'Admin: request handlers' );
+
+/*
+ * Admin-post handlers were previously unreachable from the suite: the stubs
+ * had no check_admin_referer(), so every POST died before it did anything and
+ * no handler had ever actually run. These drive the real entry points with
+ * real nonces, and read back the redirect plus the rows they wrote.
+ */
+
+/** Reset request superglobals and wp_die state between handlers. */
+function cpic_test_reset_request() {
+	$_POST    = array();
+	$_GET     = array();
+	$_REQUEST = array();
+
+	CPIC_Test_State::$wp_die   = null;
+	CPIC_Test_State::$redirects = array();
+}
+
+/** Post a valid nonce for an action, the way a real form would. */
+function cpic_test_nonce( $action ) {
+	$nonce = wp_create_nonce( $action );
+
+	$_POST['_wpnonce']    = $nonce;
+	$_REQUEST['_wpnonce'] = $nonce;
+
+	return $nonce;
+}
+
+$admin   = $plugin->service( 'admin' );
+$brands  = $plugin->service( 'brands' );
+
+cpic_test_reset_request();
+$_POST['name']          = 'Handler Brand';
+$_POST['primary_color'] = '#0f766e';
+$_POST['footer_text']   = 'Handler footer';
+cpic_test_nonce( 'cpic_brand_new' );
+$admin->handle_save_brand();
+
+$brand_rows = $brands->select( array(), 'id ASC' );
+$handler_brand = null;
+foreach ( $brand_rows as $brand_row ) {
+	if ( 'Handler Brand' === $brand_row['name'] ) {
+		$handler_brand = $brand_row;
+	}
+}
+
+CPIC_Test::ok( null !== $handler_brand, 'A brand saved through the admin handler is persisted' );
+CPIC_Test::equal( '#0f766e', $handler_brand ? $handler_brand['primary_color'] : null, 'Handler writes the submitted colour' );
+CPIC_Test::equal( 1, count( CPIC_Test_State::$redirects ), 'A successful save redirects exactly once' );
+CPIC_Test::ok(
+	isset( CPIC_Test_State::$redirects[0] ) && false !== strpos( CPIC_Test_State::$redirects[0], 'cpic_notice=saved' ),
+	'A successful save reports the saved notice',
+	CPIC_Test_State::$redirects
+);
+
+/*
+ * Two kits may share a name: the repository keeps slugs unique, so a second
+ * "Handler Brand" is a legitimate row, not a refused one. Its slug is what
+ * must differ.
+ */
+$before_dupe = count( $brand_rows );
+cpic_test_reset_request();
+$_POST['name'] = 'Handler Brand';
+cpic_test_nonce( 'cpic_brand_new' );
+$admin->handle_save_brand();
+
+$dupe_rows = $brands->select( array(), 'id ASC' );
+CPIC_Test::equal( $before_dupe + 1, count( $dupe_rows ), 'A second kit with the same name is created' );
+
+$slug_seen = array();
+$slugs_unique = true;
+foreach ( $dupe_rows as $dupe_row ) {
+	if ( isset( $slug_seen[ $dupe_row['slug'] ] ) ) {
+		$slugs_unique = false;
+	}
+	$slug_seen[ $dupe_row['slug'] ] = true;
+}
+CPIC_Test::ok( $slugs_unique, 'Brand slugs stay unique when names collide' );
+CPIC_Test::ok(
+	isset( CPIC_Test_State::$redirects[0] ) && false !== strpos( CPIC_Test_State::$redirects[0], 'cpic_notice=saved' ),
+	'A second kit with the same name reports a save'
+);
+
+// A nameless kit is refused: it would be an unidentifiable row.
+$before_nameless = count( $brands->select( array(), 'id ASC' ) );
+cpic_test_reset_request();
+cpic_test_nonce( 'cpic_brand_new' );
+$admin->handle_save_brand();
+CPIC_Test::equal( $before_nameless, count( $brands->select( array(), 'id ASC' ) ), 'A nameless brand kit creates no row' );
+CPIC_Test::ok(
+	isset( CPIC_Test_State::$redirects[0] ) && false !== strpos( CPIC_Test_State::$redirects[0], 'cpic_notice=error' ),
+	'A nameless brand kit reports an error'
+);
+
+// A stale or forged nonce must stop the handler before it writes anything.
+cpic_test_reset_request();
+$_POST['name'] = 'Forged Brand';
+$_POST['_wpnonce']        = 'not-a-real-nonce';
+$_REQUEST['_wpnonce']     = 'not-a-real-nonce';
+$forged_name = null;
+try {
+	$admin->handle_save_brand();
+} catch ( \Throwable $e ) {
+	$forged_name = 'threw';
+}
+$stored_forged = false;
+foreach ( $brands->select( array(), 'id ASC' ) as $brand_row ) {
+	if ( 'Forged Brand' === $brand_row['name'] ) {
+		$stored_forged = true;
+	}
+}
+CPIC_Test::ok( ! $stored_forged, 'A bad nonce never reaches the write' );
+CPIC_Test::ok( null !== CPIC_Test_State::$wp_die, 'A bad nonce stops the request' );
+CPIC_Test::equal(
+	403,
+	CPIC_Test_State::$wp_die ? (int) CPIC_Test_State::$wp_die['status'] : 0,
+	'A bad nonce is answered with 403'
+);
+
+// Missing post id is a 400, not a 500 and not a silent success.
+cpic_test_reset_request();
+$_POST['_wpnonce'] = wp_create_nonce( 'cpic_publish_0' );
+$_REQUEST['_wpnonce'] = $_POST['_wpnonce'];
+try {
+	$admin->handle_publish_now();
+} catch ( \Throwable $e ) {
+	unset( $e );
+}
+CPIC_Test::equal(
+	400,
+	CPIC_Test_State::$wp_die ? (int) CPIC_Test_State::$wp_die['status'] : 0,
+	'Publishing without a post id is a 400'
+);
+CPIC_Test::equal( array(), CPIC_Test_State::$redirects, 'A refused publish does not redirect' );
+
+/*
+ * A run the background renderer cannot produce is parked, not published.
+ *
+ * This is the whole point of the notice contract: the handler used to set
+ * 'published' for any non-WP_Error result, so a parked run was reported as
+ * "The post was sent to its destinations." while nothing had been sent.
+ */
+cpic_test_reset_request();
+/*
+ * Pin the renderer. Earlier suites mutate settings, and which renderer is
+ * primary decides whether a publish parks or renders — so without this the
+ * outcome below depended on test order.
+ */
+$renderer_before = (string) $settings->get( 'cpic_renderer', 'browser' );
+$settings->set( 'cpic_renderer', 'browser' );
+
+/*
+ * Claim to be a browser request, which is exactly what the studio POST is.
+ * Without it the background fallback renders a file, and the parked branch —
+ * the one this test exists to cover — is never reached.
+ */
+$browser_filter = static function () {
+	return true;
+};
+add_filter( 'cpic/render/is_browser_request', $browser_filter );
+
+$publish_post_id = 8126;
+
+CPIC_Test_State::$posts[ $publish_post_id ] = cpic_test_make_post(
+	array(
+		'ID'           => $publish_post_id,
+		'post_title'   => 'Parked publish',
+		'post_content' => '<p>Body for the parked publish test.</p>',
+		'post_status'  => 'publish',
+	)
+);
+
+$publish_target = $accounts->create(
+	array(
+		'provider'    => 'telegram',
+		'label'       => 'Parked target',
+		'account_id'  => '-1007777',
+		// A freshly created account is 'disconnected' until it is verified;
+		// resolve_targets() only offers connected destinations to a publish.
+		'status'      => 'connected',
+		'credentials' => array( 'bot_token' => '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11' ),
+	)
+);
+
+$_POST['post_id']      = $publish_post_id;
+$_POST['destinations'] = array( (int) $publish_target['id'] );
+cpic_test_nonce( 'cpic_publish_' . $publish_post_id );
+try {
+	$admin->handle_publish_now();
+} catch ( \Throwable $e ) {
+	unset( $e );
+}
+
+$publish_redirect = isset( CPIC_Test_State::$redirects[0] ) ? (string) CPIC_Test_State::$redirects[0] : '';
+$publish_notice   = '';
+if ( preg_match( '/cpic_notice=([a-z_]+)/', $publish_redirect, $publish_match ) ) {
+	$publish_notice = $publish_match[1];
+}
+
+CPIC_Test::ok( '' !== $publish_notice, 'Publishing redirects with a notice', $publish_redirect );
+CPIC_Test::ok(
+	'published' !== $publish_notice,
+	'A parked publish is never reported as published',
+	$publish_notice
+);
+CPIC_Test::equal( 'queued', $publish_notice, 'A parked publish reports that it is queued' );
+
+/*
+ * An unknown status action must report one error and stop. It used to fall
+ * through to the "saved" redirect as well, so one click produced two flashes
+ * and the last one won.
+ */
+$status_handlers = array(
+	array( 'handle_account_status', 'cpic_account_status_bogus_1' ),
+	array( 'handle_campaign_status', 'cpic_campaign_status_bogus_1' ),
+);
+
+foreach ( $status_handlers as $status_case ) {
+	list( $status_handler, $status_nonce ) = $status_case;
+
+	cpic_test_reset_request();
+	$_GET['account']     = 1;
+	$_GET['campaign']    = 1;
+	$_GET['cpic_action'] = 'bogus';
+	cpic_test_nonce( $status_nonce );
+	$admin->$status_handler();
+
+	CPIC_Test::equal( 1, count( CPIC_Test_State::$redirects ), $status_handler . ' redirects exactly once' );
+	CPIC_Test::ok(
+		isset( CPIC_Test_State::$redirects[0] ) && false !== strpos( CPIC_Test_State::$redirects[0], 'cpic_notice=error' ),
+		$status_handler . ' reports the error it settled on',
+		CPIC_Test_State::$redirects
+	);
+}
+
+$trailing_bad_case = '$status = \'published\';';
+$admin_source      = file_get_contents( CPIC_TEST_ROOT . '/src/Admin/Admin.php' );
+CPIC_Test::ok(
+	false === strpos( $admin_source, $trailing_bad_case ),
+	'The publish handler has no unconditional published branch'
+);
+
+// The queue screen must describe each notice it can be handed.
+$queue_template = file_get_contents( CPIC_TEST_ROOT . '/templates/admin/queue.php' );
+foreach ( array( 'published', 'queued', 'scheduled', 'failed' ) as $notice_key ) {
+	CPIC_Test::ok(
+		false !== strpos( $queue_template, "'" . $notice_key . "' === \$cpic_notice" ),
+		'The queue screen has a branch for the ' . $notice_key . ' notice'
+	);
+}
+CPIC_Test::ok(
+	false !== strpos( $queue_template, 'nothing has been sent yet' ),
+	'The queued notice does not claim the post was sent'
+);
+
+$settings->set( 'cpic_renderer', $renderer_before );
+remove_filter( 'cpic/render/is_browser_request', $browser_filter );
+
+/* ═══ 32. Campaign assignment contract ══════════════════════ */
+
+CPIC_Test::suite( 'Campaigns: assignment contract' );
+
+$campaign_manager = $plugin->service( 'campaign_manager' );
+
+$campaign_result = $campaign_manager->create( array( 'name' => 'Assignment campaign' ) );
+CPIC_Test::ok( ! is_wp_error( $campaign_result ), 'A campaign is created for the assignment suite' );
+$campaign_id = is_array( $campaign_result ) && isset( $campaign_result['id'] ) ? (int) $campaign_result['id'] : (int) $campaign_result;
+
+$assign_post_id = 8130;
+CPIC_Test_State::$posts[ $assign_post_id ] = cpic_test_make_post(
+	array(
+		'ID'          => $assign_post_id,
+		'post_title'  => 'Assigned post',
+		'post_status' => 'publish',
+	)
+);
+
+CPIC_Test::equal( true, $campaign_manager->assign_post( $campaign_id, $assign_post_id ), 'A post is assigned to the campaign' );
+
+// Unassigning a real assignment succeeds.
+CPIC_Test::equal( true, $campaign_manager->unassign_post( $campaign_id, $assign_post_id ), 'An assigned post is unassigned' );
+
+// Every refusal carries a code and a status, so REST can answer honestly.
+$missing_campaign = $campaign_manager->unassign_post( 999999, $assign_post_id );
+CPIC_Test::is_error( $missing_campaign, 'cpic_campaign_missing', 'Unassigning from an unknown campaign is refused' );
+CPIC_Test::equal(
+	404,
+	is_wp_error( $missing_campaign ) && isset( $missing_campaign->get_error_data()['status'] ) ? (int) $missing_campaign->get_error_data()['status'] : 0,
+	'An unknown campaign is a 404'
+);
+
+CPIC_Test::is_error( $campaign_manager->unassign_post( $campaign_id, 0 ), 'cpic_post_missing', 'Unassigning without a post is refused' );
+
+$not_assigned = $campaign_manager->unassign_post( $campaign_id, $assign_post_id );
+CPIC_Test::is_error( $not_assigned, 'cpic_not_assigned', 'Unassigning a post that is not in the campaign is refused' );
+CPIC_Test::equal(
+	404,
+	is_wp_error( $not_assigned ) && isset( $not_assigned->get_error_data()['status'] ) ? (int) $not_assigned->get_error_data()['status'] : 0,
+	'A missing assignment is a 404'
+);
+
+// The REST handler must surface the refusal instead of 200 false.
+$campaigns_controller = new \CPIC\REST\Controllers\CampaignsController( $plugin->container() );
+$unassign_request     = new WP_REST_Request(
+	array(
+		'id'      => 999999,
+		'post_id' => $assign_post_id,
+	)
+);
+$unassign_response = $campaigns_controller->unassign( $unassign_request );
+CPIC_Test::equal( 404, (int) $unassign_response->get_status(), 'REST answers 404 for an unknown campaign, not 200 false' );
+
+/* ═══ 33. Artifact retention ═══════════════════════════════ */
+
+CPIC_Test::suite( 'Rendering: artifact cleanup' );
+
+$artifact_manager = $plugin->service( 'artifact_manager' );
+$artifact_repo    = $plugin->service( 'artifacts' );
+
+$cleanup_post_id = 8140;
+CPIC_Test_State::$posts[ $cleanup_post_id ] = cpic_test_make_post( array( 'ID' => $cleanup_post_id, 'post_title' => 'Cleanup' ) );
+
+$make_artifact = static function ( $name, $created_at ) use ( $artifact_repo, $cleanup_post_id ) {
+	$path = CPIC_Test_State::$uploads_dir . '/cleanup-' . $name . '.png';
+	file_put_contents( $path, 'png' );
+
+	return (int) $artifact_repo->insert(
+		array(
+			'post_id'         => $cleanup_post_id,
+			'file_path'       => $path,
+			'file_url'        => 'https://example.test/' . $name . '.png',
+			'format'          => 'square',
+			'width'           => 1080,
+			'height'          => 1080,
+			'bytes'           => 3,
+			'checksum_sha256' => $name,
+			'created_at'      => $created_at,
+		)
+	);
+};
+
+$old_artifact    = $make_artifact( 'old', '2020-01-01 00:00:00' );
+$newest_artifact = $make_artifact( 'newest', '2020-01-02 00:00:00' );
+
+CPIC_Test::equal( 0, $artifact_manager->cleanup( 0 ), 'Cleanup with no age limit does nothing' );
+CPIC_Test::ok( null !== $artifact_repo->find( $old_artifact ), 'A zero window keeps every artifact' );
+
+CPIC_Test::equal( 1, $artifact_manager->cleanup( 30 ), 'Cleanup removes exactly the expired artifact' );
+CPIC_Test::ok( null === $artifact_repo->find( $old_artifact ), 'The expired artifact is gone' );
+CPIC_Test::ok( null !== $artifact_repo->find( $newest_artifact ), 'The newest artifact per post is kept' );
+
+/* ═══ 34. Block-editor metabox handler ════════════════════ */
+
+CPIC_Test::suite( 'Admin: editor metabox handler' );
+
+$editor_service = $plugin->service( 'editor' );
+CPIC_Test::ok( is_object( $editor_service ), 'The editor integration service resolves' );
+
+$editor_post_id = 8150;
+CPIC_Test_State::$posts[ $editor_post_id ] = cpic_test_make_post(
+	array( 'ID' => $editor_post_id, 'post_title' => 'Editor post', 'post_status' => 'publish' )
+);
+
+// A valid nonce on an editable post redirects back to the editor.
+cpic_test_reset_request();
+$_POST['post_id']           = $editor_post_id;
+$_POST['cpic_editor_nonce'] = wp_create_nonce( 'cpic_editor_image_' . $editor_post_id );
+$editor_service->handle_metabox_save();
+
+CPIC_Test::equal( 1, count( CPIC_Test_State::$redirects ), 'A verified metabox save redirects once' );
+CPIC_Test::ok(
+	isset( CPIC_Test_State::$redirects[0] ) && false !== strpos( CPIC_Test_State::$redirects[0], 'action=edit' ),
+	'The metabox save returns to the post editor',
+	CPIC_Test_State::$redirects
+);
+
+// A forged nonce never reaches the redirect.
+cpic_test_reset_request();
+$_POST['post_id']           = $editor_post_id;
+$_POST['cpic_editor_nonce'] = 'forged';
+try {
+	$editor_service->handle_metabox_save();
+} catch ( \Throwable $e ) {
+	unset( $e );
+}
+CPIC_Test::equal( array(), CPIC_Test_State::$redirects, 'A forged metabox nonce never redirects' );
+CPIC_Test::equal(
+	403,
+	CPIC_Test_State::$wp_die ? (int) CPIC_Test_State::$wp_die['status'] : 0,
+	'A forged metabox nonce is a 403'
+);
+
+/*
+ * The plugin's own publishing capability must gate this too. `edit_post`
+ * alone let an editor without cpic_publish through, while the sibling
+ * admin-post handler (handle_publish_now) refused them.
+ */
+cpic_test_reset_request();
+CPIC_Test_State::$capabilities['edit_others_posts'] = false;
+$_POST['post_id']           = $editor_post_id;
+$_POST['cpic_editor_nonce'] = wp_create_nonce( 'cpic_editor_image_' . $editor_post_id );
+try {
+	$editor_service->handle_metabox_save();
+} catch ( \Throwable $e ) {
+	unset( $e );
+}
+$refused_without_cap = 403 === ( CPIC_Test_State::$wp_die ? (int) CPIC_Test_State::$wp_die['status'] : 0 );
+unset( CPIC_Test_State::$capabilities['edit_others_posts'] );
+
+CPIC_Test::ok( $refused_without_cap, 'Without cpic_publish the metabox save is refused' );
+CPIC_Test::equal( array(), CPIC_Test_State::$redirects, 'A refused metabox save does not redirect' );
 
 /* ═══ Summary ═══════════════════════════════════════════════ */
 

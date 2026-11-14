@@ -162,11 +162,14 @@ final class EditorIntegration {
 			wp_die( esc_html__( 'That request could not be verified. Reload the post and try again.', 'custom-post-image-creator' ), 403 );
 		}
 
-		if ( ! current_user_can( 'edit_post', $post_id ) ) {
+		if ( ! current_user_can( 'edit_post', $post_id ) || ! $this->container->get( 'capabilities' )->can( 'cpic_publish' ) ) {
 			wp_die( esc_html__( 'You are not allowed to edit this post.', 'custom-post-image-creator' ), 403 );
 		}
 
 		wp_safe_redirect( add_query_arg( array( 'post' => $post_id, 'action' => 'edit' ), admin_url( 'post.php' ) ) );
-		exit;
+
+		if ( ! defined( 'CPIC_TEST_ALLOW_EXIT' ) ) {
+			exit;
+		}
 	}
 }
