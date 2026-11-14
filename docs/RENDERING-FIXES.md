@@ -240,6 +240,64 @@ Finding it surfaced two gaps in the test fixture itself (a destination with no
 encrypted credentials, and a prefix collision that answered the publish POST with
 a template response), which is the sort of thing only an end-to-end call catches.
 
+## Third pass: the parts that never ran at all
+
+The first two passes fixed things that *ran wrong*. A plugin-wide audit then
+turned up code paths that never ran at all, which is invisible to any test that
+only exercises the studio's happy path.
+
+### Scheduled publishing never fired
+
+`DeliveryManager::process_due()` existed, was correct, and had no caller. A run
+created by "Schedule" was written to `deliveries` and then sat there forever,
+while the UI reported the post as scheduled. Nothing in the job queue covers it
+either: scheduled work lives in `deliveries`, the queue table holds `publish`
+jobs, and only `process_due()` bridges them. The queue cron hook now drains due
+deliveries first.
+
+### "Saved for publishing." was a dead end
+
+When the renderer is browser-only (no GD, no headless Chromium — the normal
+case on shared hosting for Bengali text), `publish_post()` parks the run on
+`waiting_for_artifact` and the studio stores the PNG a moment later. Nothing
+picked that image up: `dispatch_delivery()` returned early on that status, on
+every pass, forever. It now looks for a usable artifact for the post and adopts
+it, and `artifact.created` dispatches the parked rows immediately so the user
+sees the post leave inside the same request instead of waiting for a cron tick.
+
+### Two clock bugs the gate for the above exposed
+
+- `publish_post()` compared a UTC `scheduled_for` against site-time rows. On a
+  UTC+6 site a run scheduled an hour ahead was "overdue" and posted at once; on
+  a negative-offset site nothing was ever due. Input is converted to site time
+  once (`to_site_time()`) and every comparison uses `is_future()`.
+- `CalendarService::reschedule()` re-projected the picked wall clock, so a
+  09:30 delivery was stored as 15:30.
+
+### `@font-face` weight ranges must be disjoint
+
+Each face was declared at its own weight, so a family with one real face let the
+browser synthesise the rest — and two faces sharing `400 600` made the *last*
+one win for everything, rendering regular text with the semibold file. Ranges are
+now derived from the manifest's `weights`: each face owns the span up to the
+midpoint of its neighbours, a single-face family owns `100 900`, and the preview
+finally agrees with the export.
+
+### Uninstall left live cron events behind
+
+The removal path cleared `cpic_cron_process_queue` and friends. Nothing has
+scheduled those names since the hooks were namespaced, so a site that deleted the
+plugin with full cleanup kept three cron events pointing at classes that no
+longer exist. The list now covers every generation, and a test derives the
+current names from `Scheduler`'s own constants.
+
+### Number settings silently became zero
+
+Typing "abc" into Batch Size saved `0`, which stops the queue dead; Time Budget
+`0` was read as "5 seconds". `bulk_set()` now reports the field and keeps the
+stored value instead of coercing, and both the admin form and the REST
+controller surface it.
+
 ## Verification
 
 ```
@@ -247,7 +305,9 @@ cd tools/harness && node verify.mjs
 ```
 
 ```
-PHP test suite                     339 assertions, 0 failures
+PHP test suite                     366 assertions, 0 failures
+Admin screens (seeded)             ALL SCREENS RENDERED
+Admin screens (fresh install)      FRESH INSTALL SCREENS RENDERED
 Studio smoke (editor JS)           117 checks, 0 failures
 Studio paint (editor canvas)       STUDIO PAINT PASSED
 Render doctor (every starter)      26 plans, 0 faults
