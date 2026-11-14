@@ -146,22 +146,22 @@ final class RenderService {
 
 		$complex = $this->plan_has_complex_script( $plan );
 
-		// Preferred renderer cannot run here (browser in a PHP request).
+		/*
+		 * Prefer a renderer that runs on the server.
+		 *
+		 * The browser renderer used to be chosen whenever the request came
+		 * from the studio, which meant the published image was produced by the
+		 * visitor's own machine. A shaping-capable server renderer is strictly
+		 * better here: same design, but the image exists even if the tab is
+		 * closed mid-publish, and scheduled/automated runs get one too.
+		 */
 		if ( 'browser' === $primary->id() || ! $primary->runs_in_background() ) {
-			if ( ! empty( $args['browser_only'] ) || $this->is_browser_request() ) {
-				return new \WP_Error(
-					'cpic_browser_only',
-					__( 'This design must be rendered in the browser.', 'custom-post-image-creator' ),
-					array( 'status' => 409, 'plan' => $plan )
-				);
-			}
-
 			$fallback = $registry->background_capable();
 
 			if ( ! $fallback ) {
 				return new \WP_Error(
 					'cpic_no_background_renderer',
-					__( 'No renderer can produce this image in the background. Open the design in the studio to render it.', 'custom-post-image-creator' ),
+					__( 'No server-side renderer is available, so the image cannot be produced here. Install librsvg (rsvg-convert), Inkscape, or ImageMagick with the librsvg delegate, then try again.', 'custom-post-image-creator' ),
 					array( 'status' => 409 )
 				);
 			}
@@ -169,7 +169,7 @@ final class RenderService {
 			if ( $complex && ! $fallback->supports_complex_scripts() ) {
 				return new \WP_Error(
 					'cpic_complex_script',
-					__( 'This design contains Bengali or another complex script. Open the post in the studio so the browser can render it.', 'custom-post-image-creator' ),
+					__( 'This design contains Bengali or another complex script, and this server has no renderer that can shape it. Install librsvg (rsvg-convert) or Inkscape so the server can produce it.', 'custom-post-image-creator' ),
 					array( 'status' => 409, 'renderer' => $fallback->id() )
 				);
 			}
@@ -272,19 +272,6 @@ final class RenderService {
 		}
 
 		return false;
-	}
-
-	/**
-	 * Whether the current request came from a browser (admin-ajax / REST UI).
-	 *
-	 * @return bool
-	 */
-	private function is_browser_request() {
-		if ( function_exists( 'wp_doing_ajax' ) && wp_doing_ajax() ) {
-			return true;
-		}
-
-		return (bool) apply_filters( 'cpic/render/is_browser_request', false );
 	}
 
 	/**

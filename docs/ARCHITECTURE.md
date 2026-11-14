@@ -104,9 +104,12 @@ Rules that keep the editor honest:
    `layout[activeFormat]` when the active format is not the document's base
    format, so switching formats never overwrites another format's layout
    (`writeProp()` is the only writer).
-5. **Exports use the identical painter.** `renderPng()` paints into an offscreen
-   canvas at plan resolution (`els.headless`), awaits fonts and images first, so
-   a PNG can never capture a half-painted frame.
+5. **Publishing does not use the painter.** The studio POSTs the *document* to
+   `/render/document`, which builds a plan and rasterises it on the server, so a
+   hand-published image and a cron-published one are the same code path.
+   `renderPng()` still paints into an offscreen canvas (`els.headless`) for
+   local previews and downloads, awaiting fonts and images first so a PNG can
+   never capture a half-painted frame.
 6. **History is document snapshots**, coalesced by key inside a 1.2 s window;
    `Escape` in an inline text editor restores the pre-edit text rather than
    committing it.

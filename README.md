@@ -4,16 +4,15 @@ Design social images for WordPress posts with correct Bengali typography, then p
 
 ## The one idea behind this version
 
-Your web server cannot shape Bengali text. PHP image libraries (GD, and Imagick without a shaping library) draw conjuncts and vowel signs as separate glyphs, which is why Bengali text in server-generated images so often looks broken.
-
-So the plugin treats the browser as the shaping engine, and is honest about the consequences:
+PHP image libraries cannot shape Bengali text. GD, and Imagick without a shaping library, draw conjuncts and vowel signs as separate glyphs, which is why Bengali text in server-generated images so often looks broken. The plugin therefore never asks them to.
 
 - A design is described once, as a **render plan**.
-- The plan is painted by the browser (studio, editor, or a headless browser you add through a filter).
-- What the studio shows and what is stored are produced from the same plan, so they cannot drift apart.
-- When a scheduled publish needs a browser and none is available, the delivery is **held with a reason** instead of quietly publishing a broken image.
+- The plan is serialised to **SVG with real `<text>`** and rasterised **on your server** by `rsvg-convert`, Inkscape, or ImageMagick with its librsvg delegate — all of which run Pango/HarfBuzz, so Bengali is shaped properly.
+- The studio paints the same plan on its canvas only because editing needs something to click on. Publishing does not use the browser.
+- A manual publish and a scheduled one go through the same endpoint, so they produce the same image.
+- If the host has no shaping rasteriser, the render **stops and says what to install**. It never falls back to the browser, because a browser fallback would silently change the result.
 
-Latin-only designs can render fully server-side; the plugin reports which renderers can shape what, rather than implying a capability it does not have.
+Run **Diagnostics → Rendering** to see which rasteriser was detected on your host.
 
 ## What's in the box
 

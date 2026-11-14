@@ -56,6 +56,9 @@ final class RendererRegistry {
 
 		$renderers = array(
 			'browser' => $browser,
+			// Shapes Bengali/Arabic correctly in a PHP request, so scheduled
+			// and automated publishing work without an admin's browser.
+			'svg'     => new SvgRenderer( $this->container ),
 			'gd'      => new ServerRenderer(),
 		);
 
@@ -94,11 +97,30 @@ final class RendererRegistry {
 	 * @return RendererInterface
 	 */
 	public function primary() {
-		$preferred = (string) $this->container->get( 'settings' )->get( 'cpic_renderer', 'browser' );
-		$renderer  = $this->get( $preferred );
+		$preferred = (string) $this->container->get( 'settings' )->get( 'cpic_renderer', '' );
+		$renderer  = '' === $preferred ? null : $this->get( $preferred );
 
-		if ( $renderer && $renderer->is_available() ) {
+		/*
+		 * An explicit choice wins only when it can actually run in the
+		 * background. The browser cannot produce an image from cron, from the
+		 * REST API, or from a queued job, so honouring it here would mean the
+		 * same design renders one way on screen and another way in automation.
+		 */
+		if ( $renderer && $renderer->is_available() && $renderer->runs_in_background() ) {
 			return $renderer;
+		}
+
+		/*
+		 * The preferred renderer is not usable here. A shaping-capable renderer
+		 * that runs in the background beats the browser even when the browser
+		 * is "available", because the browser cannot produce an image outside
+		 * an open admin screen — which is how a scheduled post used to end up
+		 * parked forever.
+		 */
+		foreach ( $this->all() as $candidate ) {
+			if ( $candidate->is_available() && $candidate->runs_in_background() && $candidate->supports_complex_scripts() ) {
+				return $candidate;
+			}
 		}
 
 		$all = $this->all();

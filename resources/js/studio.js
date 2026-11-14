@@ -7548,54 +7548,75 @@
 		}
 	}
 
+	/**
+	 * Ask the server to render the current design and store it.
+	 *
+	 * The image is produced by the server, not by this browser. That is what
+	 * makes a design published by hand identical to the one a scheduled run
+	 * produces minutes later: both go through the same plan, the same
+	 * renderer and the same rasteriser. The canvas stays on screen only
+	 * because editing needs something to click on.
+	 *
+	 * `renderPng()` is still here and still used, but only for previews that
+	 * never leave the page — see `downloadPng()` and the export menu.
+	 *
+	 * @param {Object} options Options: `attach`, `force`.
+	 * @return {Promise<Object>} { artifact, png }.
+	 */
 	async function storeArtifact( options ) {
 		options = options || {};
 
 		/*
-		 * Separate the two steps so the failure names the one that broke.
+		 * Two distinct steps, two distinct errors.
+		 *
 		 * Both used to surface as a bare "Rendering failed", which sent people
 		 * looking for a painter bug when the upload endpoint had refused the
 		 * image (a permissions or body-size problem, often).
 		 */
-		var png;
-
-		try {
-			png = await renderPng();
-		} catch ( error ) {
-			error.storeStage = 'render';
-			throw error;
-		}
-
 		var payload;
 
 		try {
-			payload = await api( CONFIG.restPath + 'artifacts', {
+			payload = await api( CONFIG.restPath + 'render/document', {
 				method: 'POST',
 				body: {
 					post_id: state.postId || 0,
 					template_id: state.templateId || 0,
 					format: state.format,
 					document: serializeDocument(),
-					binary: png.dataUrl,
+					force: !! options.force,
 					attach: !! options.attach,
 				},
 			} );
 		} catch ( error ) {
-			error.storeStage = 'upload';
+			/*
+			 * A 413 here is the host refusing the request body, not the
+			 * renderer failing. The document is small, so in practice this
+			 * means the post size limit is tiny — say so rather than blaming
+			 * the image or the renderer.
+			 */
+			error.storeStage = 'render';
 
-			// A PNG data URL is sent as JSON, so a host with a small
-			// post_max_size answers 413 (or an empty 200) rather than storing.
-			// Say so instead of blaming the renderer.
 			if ( error.code === 'http_413' || error.status === 413 ) {
+				error.storeStage = 'upload';
 				error.message = str( 'imageTooLarge', 'The image is too large for this server to accept. Ask your host to raise the upload limit, or pick a smaller format.' );
 			}
 
 			throw error;
 		}
 
+		var artifact = payload && payload.data ? payload.data : payload;
+
+		if ( ! artifact || ! artifact.id ) {
+			var blank = new Error( str( 'noArtifact', 'The server did not return a stored image. Reload the page and try again.' ) );
+			blank.storeStage = 'store';
+			throw blank;
+		}
+
 		return {
-			artifact: payload && payload.data ? payload.data : payload,
-			png: png,
+			artifact: artifact,
+			// No local PNG: the server produced the file, so there is nothing
+			// painted here to hand back.
+			png: null,
 		};
 	}
 
@@ -7606,7 +7627,7 @@
 
 			showResult( artifact, result.png );
 
-			if ( result.png.problems && result.png.problems.length ) {
+			if ( result.png && result.png.problems && result.png.problems.length ) {
 				toast( result.png.problems[ 0 ], 'warning', { duration: 7000 } );
 			}
 			// Copy only when the server really stored the file.
@@ -7773,7 +7794,7 @@
 		}
 
 		body.appendChild(
-			el( 'p', { class: 'cpic-panel__hint', text: str( 'publishHint', 'The image is rendered in this browser first, then published through the same endpoint the automations use.' ) } )
+			el( 'p', { class: 'cpic-panel__hint', text: str( 'publishHint', 'The image is rendered on this server, then published through the same endpoint the automations use — so a scheduled run and a manual publish produce the same picture.' ) } )
 		);
 
 		var progress = el( 'div', { class: 'cpic-publish__progress', hidden: true } );
@@ -7883,10 +7904,13 @@
 							 * body-size refusal behind a painter bug that did
 							 * not exist.
 							 */
-							var stage = error && error.storeStage ? ' ' + str(
-								error.storeStage === 'render' ? 'stageRender' : 'stageUpload',
-								error.storeStage === 'render' ? '(while drawing the image)' : '(while storing the image on the server)'
-							) : '';
+							var stageLabels = {
+								render: [ 'stageRender', '(while rendering the image on the server)' ],
+								store: [ 'stageStore', '(while storing the image on the server)' ],
+								upload: [ 'stageUpload', '(while storing the image on the server)' ],
+							};
+							var stageKey = ( error && stageLabels[ error.storeStage ] ) || null;
+							var stage = stageKey ? ' ' + str( stageKey[ 0 ], stageKey[ 1 ] ) : '';
 
 							var reason = ( error && error.message ) || str( 'publishFailed', 'Publishing failed' );
 

@@ -119,6 +119,9 @@ final class ConfigServiceProvider extends ServiceProvider {
 		$c->factory( 'render_plan', static function ( Container $c ) {
 			return new \CPIC\Rendering\RenderPlanBuilder( $c );
 		} );
+		$c->factory( 'svg_serializer', static function ( Container $c ) {
+			return new \CPIC\Rendering\SvgPlanSerializer( $c );
+		} );
 		$c->factory( 'renderers', static function ( Container $c ) {
 			return new \CPIC\Rendering\RendererRegistry( $c );
 		} );

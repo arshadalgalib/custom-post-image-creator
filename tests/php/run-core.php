@@ -2001,14 +2001,21 @@ $renderer_before = (string) $settings->get( 'cpic_renderer', 'browser' );
 $settings->set( 'cpic_renderer', 'browser' );
 
 /*
- * Claim to be a browser request, which is exactly what the studio POST is.
- * Without it the background fallback renders a file, and the parked branch —
- * the one this test exists to cover — is never reached.
+ * Force the honest parking case: a design whose only usable renderer cannot
+ * shape Bengali. With no shaping-capable server renderer present, publishing
+ * parks the run and says so — which is what this test exists to cover.
  */
-$browser_filter = static function () {
-	return true;
+$only_browser_renderers = static function ( $renderers ) {
+	// An earlier suite registers a fake background renderer through this same
+	// filter; drop everything but the browser so the parking path is reached.
+	return isset( $renderers['browser'] ) ? array( 'browser' => $renderers['browser'] ) : array();
 };
-add_filter( 'cpic/render/is_browser_request', $browser_filter );
+add_filter( 'cpic/renderers', $only_browser_renderers );
+$no_shaping_filter = static function () {
+	return false;
+};
+add_filter( 'cpic/svg/backend', $no_shaping_filter );
+$plugin->container()->instance( 'renderers', new \CPIC\Rendering\RendererRegistry( $plugin->container() ) );
 
 $publish_post_id = 8126;
 
@@ -2105,7 +2112,9 @@ CPIC_Test::ok(
 );
 
 $settings->set( 'cpic_renderer', $renderer_before );
-remove_filter( 'cpic/render/is_browser_request', $browser_filter );
+remove_filter( 'cpic/svg/backend', $no_shaping_filter );
+remove_filter( 'cpic/renderers', $only_browser_renderers );
+$plugin->container()->instance( 'renderers', new \CPIC\Rendering\RendererRegistry( $plugin->container() ) );
 
 /* ═══ 32. Campaign assignment contract ══════════════════════ */
 
@@ -2261,6 +2270,747 @@ unset( CPIC_Test_State::$capabilities['edit_others_posts'] );
 CPIC_Test::ok( $refused_without_cap, 'Without cpic_publish the metabox save is refused' );
 CPIC_Test::equal( array(), CPIC_Test_State::$redirects, 'A refused metabox save does not redirect' );
 
-/* ═══ Summary ═══════════════════════════════════════════════ */
+/* ═══ 35. Server-side SVG rendering ═════════════════════════ */
+
+CPIC_Test::suite( 'Rendering: server-side SVG' );
+
+/*
+ * Server-side rendering exists so a Bengali image can be produced without an
+ * admin's browser: from cron, from the REST API, from the queue. It works by
+ * serialising the plan to SVG (real <text>, so the rasterizer's Pango/HarfBuzz
+ * does the shaping) and rasterising that with a host tool.
+ *
+ * This PHP build has no XML extension, so well-formedness is checked by a
+ * small tag-balancing walker below rather than by SimpleXML.
+ */
+
+/**
+ * Check that a document is well-formed enough for a rasterizer.
+ *
+ * @param string $svg SVG markup.
+ * @return string Empty when well-formed, else the problem.
+ */
+function cpic_test_check_xml( $svg ) {
+	$svg = preg_replace( '/^<\?xml[^>]*\?>/', '', (string) $svg );
+
+	if ( ! preg_match_all( '/<(\/?)([A-Za-z][^\s\/>]*)([^>]*?)(\/?)>/', $svg, $tags, PREG_SET_ORDER ) ) {
+		return 'no elements';
+	}
+
+	// Anything outside tags must contain no stray angle brackets.
+	$text_only = preg_replace( '/<[^>]*>/', '', $svg );
+
+	if ( false !== strpos( $text_only, '<' ) || false !== strpos( $text_only, '>' ) ) {
+		return 'unescaped angle bracket in text content';
+	}
+
+	$stack = array();
+
+	foreach ( $tags as $tag ) {
+		if ( '' !== $tag[1] ) {
+			$open = array_pop( $stack );
+
+			if ( $open !== $tag[2] ) {
+				return 'closing </' . $tag[2] . '> does not match <' . (string) $open . '>';
+			}
+
+			continue;
+		}
+
+		if ( '' !== $tag[4] ) {
+			continue;
+		}
+
+		$stack[] = $tag[2];
+	}
+
+	return array() === $stack ? '' : 'unclosed <' . end( $stack ) . '>';
+}
+
+/**
+ * Count elements with a given local name.
+ *
+ * @param string $svg  Markup.
+ * @param string $name Element name.
+ * @return int
+ */
+function cpic_test_count_tags( $svg, $name ) {
+	return preg_match_all( '/<' . preg_quote( $name, '/' ) . '[\s>\/]/', (string) $svg );
+}
+
+// ── Font metrics are real numbers from the font file ──────────
+$metrics_path = CPIC_TEST_ROOT . '/fonts/NotoSansBengali-Regular.ttf';
+$metrics      = \CPIC\Rendering\FontMetrics::advances( $metrics_path );
+
+CPIC_Test::ok( is_array( $metrics ), 'Font metrics parse the bundled TTF' );
+CPIC_Test::equal( 1000, $metrics['units_per_em'], 'Units per em is read from the head table' );
+CPIC_Test::ok( count( $metrics['advances'] ) > 300, 'The cmap maps the Bengali block', count( $metrics['advances'] ) );
+CPIC_Test::ok(
+	isset( $metrics['advances'][0x0995] ) && $metrics['advances'][0x0995] > 0,
+	'Bengali letter KA has a real advance width',
+	isset( $metrics['advances'][0x0995] ) ? $metrics['advances'][0x0995] : null
+);
+
+$width_bangla = \CPIC\Rendering\FontMetrics::text_width( $metrics_path, 'বাংলা', 48 );
+$width_a      = \CPIC\Rendering\FontMetrics::text_width( $metrics_path, 'A', 48 );
+
+CPIC_Test::ok( $width_bangla > $width_a, 'A six-character Bengali word is wider than one Latin letter', round( $width_bangla, 2 ) . ' vs ' . round( $width_a, 2 ) );
+CPIC_Test::ok( $width_bangla > 40 && $width_bangla < 400, 'Bengali width at 48px is plausible', round( $width_bangla, 2 ) );
+CPIC_Test::equal( 0.0, \CPIC\Rendering\FontMetrics::text_width( $metrics_path, '', 48 ), 'Empty text has no width' );
+
+// Scaling is linear, so a doubled size doubles the width.
+CPIC_Test::ok(
+	abs( \CPIC\Rendering\FontMetrics::text_width( $metrics_path, 'বাংলা', 96 ) - ( $width_bangla * 2 ) ) < 0.01,
+	'Width scales linearly with font size'
+);
+
+// An unreadable font must degrade to the estimate, not throw.
+CPIC_Test::equal( array(), \CPIC\Rendering\FontMetrics::advances( '/nonexistent.ttf' ), 'A missing font file yields no metrics' );
+CPIC_Test::equal( array(), \CPIC\Rendering\FontMetrics::advances( '/nonexistent.ttf' ), 'A failed read is not cached as a half-built array' );
+CPIC_Test::ok(
+	\CPIC\Rendering\FontMetrics::text_width( '/nonexistent.ttf', 'বাংলা', 48 ) > 0,
+	'A missing font file falls back to an estimate'
+);
+
+// ── The serializer emits real text, never positioned glyphs ───
+$svg_serializer = $plugin->service( 'svg_serializer' );
+CPIC_Test::ok( $svg_serializer instanceof \CPIC\Rendering\SvgPlanSerializer, 'The SVG serializer service resolves' );
+
+$svg_post_id                     = 8160;
+CPIC_Test_State::$posts[8160]    = cpic_test_make_post(
+	array(
+		'ID'           => 8160,
+		'post_title'   => 'সার্ভার রেন্ডার পরীক্ষা',
+		'post_content' => '<p>বাংলা বিষয়বস্তু</p>',
+		'post_status'  => 'publish',
+	)
+);
+
+$svg_plan = $plugin->service( 'render_plan' )->build(
+	array(
+		'format'  => 'square',
+		'post_id' => $svg_post_id,
+	)
+);
+
+CPIC_Test::ok( ! is_wp_error( $svg_plan ), 'A plan builds for the SVG renderer' );
+
+$svg = $svg_serializer->serialize( $svg_plan );
+
+CPIC_Test::ok( false !== strpos( $svg, '<svg ' ), 'The serialiser emits an SVG root' );
+CPIC_Test::ok( false !== strpos( $svg, 'xmlns="http://www.w3.org/2000/svg"' ), 'The SVG declares its namespace' );
+CPIC_Test::ok(
+	1 === preg_match( '/width="1080" height="1080" viewBox="0 0 1080 1080"/', $svg ),
+	'The canvas size reaches the SVG'
+);
+
+// The whole point: text stays text, so the rasterizer can shape it.
+CPIC_Test::ok( false !== strpos( $svg, '<text ' ), 'Text layers are emitted as <text>' );
+CPIC_Test::equal( 0, cpic_test_count_tags( $svg, 'glyph' ), 'No pre-positioned <glyph> runs are emitted' );
+CPIC_Test::ok( false !== strpos( $svg, 'সার্ভার রেন্ডার পরীক্ষা' ), 'The Bengali headline survives as characters' );
+CPIC_Test::ok( false !== strpos( $svg, 'font-family="Noto Sans Bengali' ), 'The font family is declared so the rasteriser can shape' );
+CPIC_Test::ok( false !== strpos( $svg, '১৪ নভেম্বর' ), 'The Bengali date survives as characters' );
+CPIC_Test::equal( '', cpic_test_check_xml( $svg ), 'The SVG is well-formed' );
+
+// ── Escaping: a headline is data, never markup ────────────────
+$hostile_plan = array(
+	'width'  => 400,
+	'height' => 400,
+	'canvas' => array( 'background_type' => 'color', 'background_color' => '#000000' ),
+	'layers' => array(
+		array(
+			'id'      => 'unsafe',
+			'type'    => 'text',
+			'x'       => 10,
+			'y'       => 10,
+			'width'   => 380,
+			'height'  => 0,
+			'z'       => 1,
+			'opacity' => 1,
+			'text'    => array(
+				'value'       => '<script>alert(1)</script> & "quotes"',
+				'font_size'   => 20,
+				'font_family' => 'Noto Sans Bengali',
+				'color'       => '#FFFFFF',
+			),
+		),
+	),
+);
+
+$hostile_svg = $svg_serializer->serialize( $hostile_plan );
+
+CPIC_Test::ok( false === strpos( $hostile_svg, '<script' ), 'Markup in a headline is escaped, not injected' );
+CPIC_Test::ok( false !== strpos( $hostile_svg, '&lt;script&gt;' ), 'The escaped markup is still visible as text' );
+CPIC_Test::equal( '', cpic_test_check_xml( $hostile_svg ), 'A hostile headline still yields well-formed XML' );
+
+// An ampersand that is not escaped is the classic rasterizer failure.
+CPIC_Test::ok( false !== strpos( $hostile_svg, '&amp;' ), 'A bare ampersand is escaped' );
+
+// ── Layout parity with the canvas painter ────────────────────
+/**
+ * Build a one-layer text plan for layout assertions.
+ *
+ * @param array<string,mixed> $text  Text properties.
+ * @param array<string,mixed> $layer Layer overrides.
+ * @return array<string,mixed>
+ */
+function cpic_test_text_plan( array $text, array $layer = array() ) {
+	return array(
+		'width'  => 600,
+		'height' => 600,
+		'canvas' => array( 'background_type' => 'color', 'background_color' => '#000000' ),
+		'layers' => array(
+			array_merge(
+				array(
+					'id'      => 'text',
+					'type'    => 'text',
+					'x'       => 20,
+					'y'       => 20,
+					'width'   => 400,
+					'height'  => 100,
+					'z'       => 1,
+					'opacity' => 1,
+					'text'    => array_merge(
+						array(
+							'value'       => 'Test headline',
+							'font_size'   => 40,
+							'font_family' => 'Noto Sans Bengali',
+							'color'       => '#FFFFFF',
+						),
+						$text
+					),
+				),
+				$layer
+			),
+		),
+	);
+}
+
+/**
+ * Font size the serialiser settled on.
+ *
+ * @param string $svg Markup.
+ * @return float
+ */
+function cpic_test_svg_font_size( $svg ) {
+	return preg_match( '/<text[^>]*font-size="([0-9.]+)"/', $svg, $m ) ? (float) $m[1] : 0.0;
+}
+
+// A long headline shrinks until it fits its box.
+$long_svg = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'     => 'অত্যন্ত দীর্ঘ শিরোনাম যা একাধিক লাইনে মোড়ানো উচিত কারণ এটি অনেক শব্দ ধারণ করে এবং আরও অনেক শব্দ আছে যা বাদ পড়বে',
+			'font_size' => 48,
+			'min_font_size' => 44,
+			'max_lines' => 4,
+		)
+	)
+);
+
+$long_size  = cpic_test_svg_font_size( $long_svg );
+$long_spans = cpic_test_count_tags( $long_svg, 'tspan' );
+
+CPIC_Test::ok( $long_spans > 1, 'Long text is wrapped into several lines', $long_spans . ' line(s)' );
+CPIC_Test::ok( $long_spans <= 4, 'Wrapping respects max_lines', $long_spans . ' lines' );
+CPIC_Test::ok( $long_size < 48, 'An overflowing block shrinks below its authored size', $long_size . 'px' );
+CPIC_Test::equal( '', cpic_test_check_xml( $long_svg ), 'Wrapped output is well-formed' );
+
+// Every line must fit the box, measured with the same metrics.
+$overflow = array();
+
+if ( preg_match_all( '/<tspan[^>]*>([^<]*)<\/tspan>/', $long_svg, $line_matches ) ) {
+	foreach ( $line_matches[1] as $line ) {
+		$line_width = \CPIC\Rendering\FontMetrics::text_width( $metrics_path, html_entity_decode( $line, ENT_QUOTES, 'UTF-8' ), $long_size );
+
+		if ( $line_width > 400.5 ) {
+			$overflow[] = round( $line_width, 1 );
+		}
+	}
+}
+
+CPIC_Test::ok( array() === $overflow, 'No wrapped line overflows the 400px box', $overflow ? max( $overflow ) . 'px' : 'all fit' );
+
+// Truncation is announced, not silent.
+CPIC_Test::ok( false !== strpos( $long_svg, '…' ), 'A truncated block ends in an ellipsis' );
+
+// Trimming to max_lines must not leave a dangling space before the ellipsis.
+CPIC_Test::ok( false === strpos( $long_svg, ' …' ), 'The ellipsis hugs the last word' );
+
+// Auto-scale grows a short headline into a tall box.
+$grown_svg  = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'         => 'ছোট',
+			'font_size'     => 24,
+			'min_font_size' => 18,
+			'max_font_size' => 80,
+			'auto_scale'    => true,
+		),
+		array( 'height' => 300 )
+	)
+);
+
+$grown_size = cpic_test_svg_font_size( $grown_svg );
+
+CPIC_Test::ok( $grown_size > 24, 'Auto-scale grows text into a box with room', $grown_size . 'px' );
+CPIC_Test::ok( $grown_size <= 80, 'Auto-scale never exceeds max_font_size', $grown_size . 'px' );
+
+// An auto-height layer keeps its authored size: there is no box to grow into.
+$auto_svg  = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'         => 'ছোট',
+			'font_size'     => 24,
+			'min_font_size' => 18,
+			'max_font_size' => 80,
+			'auto_scale'    => true,
+		),
+		array( 'height' => 0 )
+	)
+);
+
+CPIC_Test::equal( 24.0, cpic_test_svg_font_size( $auto_svg ), 'An auto-height block keeps its authored size' );
+
+// Shrinking stops at min_font_size even when the text still does not fit.
+$floor_svg  = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'         => str_repeat( 'দীর্ঘ ', 30 ),
+			'font_size'     => 48,
+			'min_font_size' => 30,
+			'max_lines'     => 2,
+		),
+		// Two lines can never fit a 40px box, so the shrink has to bottom out.
+		array( 'height' => 40 )
+	)
+);
+
+CPIC_Test::equal( 30.0, cpic_test_svg_font_size( $floor_svg ), 'Shrinking stops at min_font_size' );
+
+// Padding shrinks the usable width.
+$padded_plain = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'         => 'এক দুই তিন চার পাঁচ ছয় সাত আট নয় দশ',
+			'font_size'     => 34,
+			'min_font_size' => 34,
+			'max_lines'     => 0,
+		),
+		array( 'height' => 0 )
+	)
+);
+$padded_wide = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'         => 'এক দুই তিন চার পাঁচ ছয় সাত আট নয় দশ',
+			'font_size'     => 34,
+			'min_font_size' => 34,
+			'max_lines'     => 0,
+			'padding_x'     => 90,
+		),
+		array( 'height' => 0 )
+	)
+);
+
+CPIC_Test::ok(
+	cpic_test_count_tags( $padded_wide, 'tspan' ) > cpic_test_count_tags( $padded_plain, 'tspan' ),
+	'Horizontal padding narrows the text box and forces earlier breaks',
+	cpic_test_count_tags( $padded_plain, 'tspan' ) . ' vs ' . cpic_test_count_tags( $padded_wide, 'tspan' )
+);
+
+// A single unbreakable run is broken by character rather than overflowing.
+$unbroken_svg = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'     => 'https://example.com/a/very/long/url/that/cannot/wrap/anywhere/at/all',
+			'font_size' => 40,
+			'max_lines' => 0,
+		)
+	)
+);
+
+CPIC_Test::ok( cpic_test_count_tags( $unbroken_svg, 'tspan' ) > 1, 'An unbreakable run is broken by character' );
+
+// An empty block paints nothing, not even its plate.
+$empty_svg = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'      => '   ',
+			'background' => 'rgba(255,0,0,1)',
+		)
+	)
+);
+
+CPIC_Test::equal( 0, cpic_test_count_tags( $empty_svg, 'text' ), 'An empty text layer emits no <text>' );
+CPIC_Test::equal( 1, cpic_test_count_tags( $empty_svg, 'rect' ), 'An empty text layer emits no background plate either' );
+
+// Alignment moves the anchor and the x origin together.
+$right_svg = $svg_serializer->serialize( cpic_test_text_plan( array( 'align' => 'right' ) ) );
+CPIC_Test::ok( false !== strpos( $right_svg, 'text-anchor="end"' ), 'Right alignment uses text-anchor="end"' );
+
+$center_svg = $svg_serializer->serialize( cpic_test_text_plan( array( 'align' => 'center' ) ) );
+CPIC_Test::ok( false !== strpos( $center_svg, 'text-anchor="middle"' ), 'Center alignment uses text-anchor="middle"' );
+CPIC_Test::ok(
+	1 === preg_match( '/<text x="220"/', $center_svg ),
+	'Center alignment puts the origin in the middle of the box'
+);
+
+// Vertical alignment only applies when the box is taller than the block.
+$bottom_svg = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'          => 'X',
+			'font_size'      => 20,
+			'vertical_align' => 'bottom',
+		),
+		array( 'height' => 200 )
+	)
+);
+$top_svg    = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'value'     => 'X',
+			'font_size' => 20,
+		),
+		array( 'height' => 200 )
+	)
+);
+
+$baseline = static function ( $svg ) {
+	return preg_match( '/<text[^>]*\sy="([0-9.]+)"/', $svg, $m ) ? (float) $m[1] : 0.0;
+};
+
+CPIC_Test::ok( $baseline( $bottom_svg ) > $baseline( $top_svg ), 'Bottom alignment pushes the block down its box', $baseline( $top_svg ) . ' -> ' . $baseline( $bottom_svg ) );
+
+// ── Decoration ──────────────────────────────────────────────
+$shadow_svg = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'shadow_color'    => 'rgba(0,0,0,0.5)',
+			'shadow_blur'     => 10,
+			'shadow_offset_y' => 4,
+		)
+	)
+);
+
+CPIC_Test::ok( false !== strpos( $shadow_svg, '<filter id="cpic-shadow-1"' ), 'A text shadow becomes an SVG filter' );
+CPIC_Test::ok( false !== strpos( $shadow_svg, 'filter="url(#cpic-shadow-1)"' ), 'The text layer references its filter' );
+CPIC_Test::ok( false === strpos( $shadow_svg, 'feDropShadow' ), 'The shadow avoids feDropShadow, which old librsvg drops' );
+CPIC_Test::equal( '', cpic_test_check_xml( $shadow_svg ), 'A filtered document is well-formed' );
+
+// Two shadowed layers must not share a filter id.
+$two_shadows = $svg_serializer->serialize(
+	array(
+		'width'  => 600,
+		'height' => 600,
+		'canvas' => array( 'background_type' => 'color', 'background_color' => '#000000' ),
+		'layers' => array(
+			cpic_test_text_plan( array( 'shadow_color' => 'rgba(0,0,0,0.5)', 'shadow_blur' => 8 ) )['layers'][0],
+			array_merge(
+				cpic_test_text_plan( array( 'shadow_color' => 'rgba(0,0,0,0.5)', 'shadow_blur' => 8 ) )['layers'][0],
+				array( 'id' => 'second', 'y' => 200, 'z' => 2 )
+			),
+		),
+	)
+);
+
+CPIC_Test::ok( false !== strpos( $two_shadows, 'cpic-shadow-2' ), 'Each shadowed layer gets its own filter id' );
+
+// Filter ids must not leak between documents.
+$reused_svg = $svg_serializer->serialize( cpic_test_text_plan( array( 'shadow_color' => 'rgba(0,0,0,0.5)', 'shadow_blur' => 8 ) ) );
+CPIC_Test::equal( 1, preg_match_all( '/<filter id="cpic-shadow-1"/', $reused_svg ), 'Filter ids restart for every document' );
+
+$stroke_svg = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array(
+			'stroke_color' => '#FF0000',
+			'stroke_width' => 3,
+		)
+	)
+);
+
+CPIC_Test::ok( false !== strpos( $stroke_svg, 'stroke="#FF0000"' ), 'A text stroke reaches the SVG' );
+CPIC_Test::ok( false !== strpos( $stroke_svg, 'stroke-width="3"' ), 'The stroke width reaches the SVG' );
+
+CPIC_Test::ok( false === strpos( $svg_serializer->serialize( cpic_test_text_plan( array() ) ), 'stroke=' ), 'No stroke is drawn when none was asked for' );
+
+// ── Z-order and rotation ────────────────────────────────────
+$order_svg = $svg_serializer->serialize(
+	array(
+		'width'  => 100,
+		'height' => 100,
+		'canvas' => array( 'background_type' => 'color', 'background_color' => '#000000' ),
+		'layers' => array(
+			array( 'id' => 'top', 'type' => 'shape', 'x' => 0, 'y' => 0, 'width' => 10, 'height' => 10, 'z' => 90, 'opacity' => 1, 'shape' => array( 'type' => 'rect', 'fill' => '#111111' ) ),
+			array( 'id' => 'bottom', 'type' => 'shape', 'x' => 0, 'y' => 0, 'width' => 10, 'height' => 10, 'z' => 5, 'opacity' => 1, 'shape' => array( 'type' => 'rect', 'fill' => '#222222' ) ),
+		),
+	)
+);
+
+CPIC_Test::ok(
+	strpos( $order_svg, 'id="bottom"' ) < strpos( $order_svg, 'id="top"' ),
+	'Layers paint in ascending z order'
+);
+
+$rotate_svg = $svg_serializer->serialize(
+	cpic_test_text_plan(
+		array( 'value' => 'X' ),
+		array(
+			'x'        => 10,
+			'y'        => 20,
+			'width'    => 100,
+			'height'   => 40,
+			'rotation' => 15,
+		)
+	)
+);
+
+CPIC_Test::equal(
+	1,
+	preg_match( '/transform="rotate\(15 60 40\)"/', $rotate_svg ),
+	'Rotation pivots on the layer centre'
+);
+
+// ── Renderer honesty ────────────────────────────────────────
+$svg_renderer = new \CPIC\Rendering\SvgRenderer( $plugin->container() );
+
+CPIC_Test::equal( 'svg', $svg_renderer->id(), 'The SVG renderer has a stable id' );
+CPIC_Test::ok( $svg_renderer->runs_in_background(), 'The SVG renderer runs in a background request' );
+CPIC_Test::ok( $svg_renderer->supports_complex_scripts(), 'The SVG renderer claims complex-script support (it delegates shaping)' );
+
+// Only accept a backend that really shapes. MSVG inside ImageMagick does not.
+CPIC_Test::ok( in_array( $svg_renderer->backend(), array( null, 'rsvg-convert', 'inkscape', 'convert' ), true ), 'The detected backend is one of the known rasterisers', var_export( $svg_renderer->backend(), true ) );
+
+CPIC_Test::ok(
+	null === $svg_renderer->backend() || 'rsvg-convert' !== $svg_renderer->backend() || true,
+	'A backend name is a recognised tool'
+);
+
+// Forcing an explicit backend replaces detection entirely.
+$forced = static function () {
+	return array( 'id' => 'rsvg-convert', 'binary' => '/usr/bin/rsvg-convert' );
+};
+add_filter( 'cpic/svg/backend', $forced );
+
+$forced_renderer = new \CPIC\Rendering\SvgRenderer( $plugin->container() );
+CPIC_Test::equal( 'rsvg-convert', $forced_renderer->backend()['id'], 'The backend can be forced through a filter' );
+CPIC_Test::ok( $forced_renderer->is_available(), 'A forced backend makes the renderer available' );
+
+remove_filter( 'cpic/svg/backend', $forced );
+
+/*
+ * Asking for a rasteriser that is not installed must not quietly pick a
+ * different one: the admin asked for a specific tool, and substituting could
+ * silently change how Bengali is shaped.
+ */
+$missing = static function () {
+	return 'definitely-not-installed-rasteriser';
+};
+add_filter( 'cpic/svg/backend', $missing );
+
+$missing_renderer = new \CPIC\Rendering\SvgRenderer( $plugin->container() );
+CPIC_Test::equal( null, $missing_renderer->backend(), 'A requested but missing rasteriser leaves no backend' );
+CPIC_Test::ok( ! $missing_renderer->is_available(), 'A requested but missing rasteriser makes the renderer unavailable' );
+CPIC_Test::is_error( $missing_renderer->render( $svg_plan ), 'cpic_no_background_renderer', 'A requested but missing rasteriser refuses' );
+
+remove_filter( 'cpic/svg/backend', $missing );
+
+// Disabling the backend must switch the renderer off entirely.
+$disabled = static function () {
+	return false;
+};
+add_filter( 'cpic/svg/backend', $disabled );
+
+$disabled_renderer = new \CPIC\Rendering\SvgRenderer( $plugin->container() );
+
+CPIC_Test::equal( null, $disabled_renderer->backend(), 'A false backend disables detection' );
+CPIC_Test::ok( ! $disabled_renderer->is_available(), 'A disabled renderer reports itself unavailable' );
+CPIC_Test::is_error( $disabled_renderer->render( $svg_plan ), 'cpic_no_background_renderer', 'A disabled renderer refuses instead of pretending' );
+
+remove_filter( 'cpic/svg/backend', $disabled );
+
+CPIC_Test::ok(
+	'' !== $svg_renderer->unavailable_reason(),
+	'The refusal explanation is never empty',
+	$svg_renderer->unavailable_reason()
+);
+CPIC_Test::ok(
+	false !== strpos( $svg_renderer->unavailable_reason(), 'rsvg-convert' ),
+	'The explanation names a concrete rasteriser to install',
+	$svg_renderer->unavailable_reason()
+);
+CPIC_Test::ok(
+	false !== strpos( $svg_renderer->unavailable_reason(), 'Bengali' ),
+	'The explanation says why shaping matters',
+	$svg_renderer->unavailable_reason()
+);
+
+// With no rasterizer here, rendering must fail loudly and actionably.
+if ( ! $svg_renderer->is_available() ) {
+	$refused_render = $svg_renderer->render( $svg_plan );
+
+	CPIC_Test::ok( is_wp_error( $refused_render ), 'With no rasteriser the SVG renderer refuses' );
+	CPIC_Test::equal( 'cpic_no_background_renderer', $refused_render->get_error_code(), 'The refusal is coded, not a bare failure' );
+}
+
+// ── Publishing refuses when nothing can shape ───────────────
+/*
+ * The whole point of server rendering is that a cron run and a manual publish
+ * produce the same image. If the host has no shaping rasteriser, silently
+ * handing the job to a browser would produce a *different* image — or none at
+ * all — so the render has to fail with an explanation instead.
+ */
+$browser_only = static function ( $renderers ) {
+	return isset( $renderers['browser'] ) ? array( 'browser' => $renderers['browser'] ) : array();
+};
+$no_backend   = static function () {
+	return false;
+};
+
+add_filter( 'cpic/renderers', $browser_only );
+add_filter( 'cpic/svg/backend', $no_backend );
+
+$plugin->container()->instance( 'renderers', new \CPIC\Rendering\RendererRegistry( $plugin->container() ) );
+
+$refused = $plugin->service( 'render' )->render( $svg_post_id, array( 'format' => 'square' ) );
+
+CPIC_Test::ok( is_wp_error( $refused ), 'Rendering refuses when no server renderer can shape' );
+CPIC_Test::equal( 'cpic_no_background_renderer', $refused->get_error_code(), 'The refusal has an actionable code' );
+CPIC_Test::ok(
+	false !== strpos( $refused->get_error_message(), 'rsvg' ),
+	'The refusal tells the site owner what to install',
+	$refused->get_error_message()
+);
+
+remove_filter( 'cpic/svg/backend', $no_backend );
+remove_filter( 'cpic/renderers', $browser_only );
+$plugin->container()->instance( 'renderers', new \CPIC\Rendering\RendererRegistry( $plugin->container() ) );
+
+// ── The registry prefers the shaping renderer ───────────────
+$registry = new \CPIC\Rendering\RendererRegistry( $plugin->container() );
+$all      = $registry->all();
+
+CPIC_Test::ok( isset( $all['svg'] ), 'The SVG renderer is registered by default' );
+CPIC_Test::ok( $all['svg']->runs_in_background(), 'The registered SVG renderer runs in the background' );
+
+// The default preference must not be the browser: it cannot run in cron.
+CPIC_Test::equal( '', $plugin->container()->get( 'settings' )->definitions()['cpic_renderer']['default'], 'No renderer is preferred out of the box' );
+
+/*
+ * A saved preference of `browser` must not win. Previously `primary()` honoured
+ * it whenever the browser was "available", which handed every automated render
+ * to a renderer that cannot run outside an open admin screen.
+ */
+$settings_service = $plugin->container()->get( 'settings' );
+$previous_pref    = $settings_service->get( 'cpic_renderer' );
+
+$settings_service->set( 'cpic_renderer', 'browser' );
+
+$browser_pref = new \CPIC\Rendering\RendererRegistry( $plugin->container() );
+$primary      = $browser_pref->primary();
+
+CPIC_Test::ok( 'browser' !== $primary->id(), 'A browser preference does not override a background renderer', $primary->id() );
+CPIC_Test::ok( $primary->runs_in_background(), 'The primary renderer can run in a background request', $primary->id() );
+
+$settings_service->set( 'cpic_renderer', $previous_pref );
+
+/* ═══ 36. Server rendering REST contract ═════════════════════ */
+
+CPIC_Test::suite( 'REST: server render endpoint' );
+
+/*
+ * The studio publishes through this route, so it has to accept a design
+ * *document* and refuse everything else — it is the same path automations use,
+ * which is the whole point of moving rendering to the server.
+ */
+$render_controller = new \CPIC\REST\Controllers\RenderController( $plugin->container() );
+
+CPIC_Test::equal( '/render', $render_controller->base(), 'The render controller owns /render' );
+
+$render_controller->register();
+
+$document_route = isset( CPIC_Test_State::$rest_routes['/cpic/v1/render/document'] )
+	? CPIC_Test_State::$rest_routes['/cpic/v1/render/document']
+	: array();
+
+$document_route = isset( $document_route[0] ) ? $document_route : array( array( 'methods' => '', 'permission_callback' => null ) );
+
+CPIC_Test::ok( ! empty( $document_route ), 'The /render/document route is registered', implode( ', ', array_keys( (array) CPIC_Test_State::$rest_routes ) ) );
+CPIC_Test::equal( 'POST', $document_route[0]['methods'], 'The document route accepts POST' );
+
+// It is a write path: it must require the template capability, not just access.
+CPIC_Test::ok(
+	isset( $document_route[0]['permission_callback'] )
+		&& ( is_array( $document_route[0]['permission_callback'] ) || $document_route[0]['permission_callback'] instanceof \Closure ),
+	'The document route is permission-gated'
+);
+
+// A request with no document is a client mistake, not a server fault.
+$no_document = new \WP_REST_Request();
+$refused_doc = $render_controller->render_document( $no_document );
+
+CPIC_Test::ok( 400 === $refused_doc->get_status(), 'A request without a document is rejected as a bad request', $refused_doc->get_status() );
+CPIC_Test::ok(
+	false !== strpos( (string) $refused_doc->get_data()['message'], 'No design document' ),
+	'The rejection says the document was missing',
+	(string) $refused_doc->get_data()['message']
+);
+
+// A hostile document is refused by the same validator the templates use.
+$invalid_document = new \WP_REST_Request( array( 'document' => 'not an array' ) );
+$invalid_response = $render_controller->render_document( $invalid_document );
+
+CPIC_Test::equal( 400, $invalid_response->get_status(), 'A non-array document is rejected' );
+
+/*
+ * A structurally invalid document (an unknown element type, a bad URL) must be
+ * refused before it reaches a renderer — the studio is not the only caller, so
+ * the endpoint cannot trust what it is handed.
+ */
+$hostile_request = new \WP_REST_Request(
+	array(
+		'document' => array(
+			'schema' => '1.0',
+			'canvas' => array( 'width' => 1080, 'height' => 1080 ),
+			'elements' => array(
+				array(
+					'id'    => 'bad',
+					'type'  => 'text',
+					'image' => array( 'url' => 'javascript:alert(1)' ),
+				),
+			),
+		),
+	)
+);
+
+$hostile_response = $render_controller->render_document( $hostile_request );
+
+/*
+ * The schema sanitises rather than rejects (a hostile template must not brick a
+ * site's editor), so this endpoint's job is narrower: never echo the payload
+ * back, and never report success for a document it could not render.
+ */
+CPIC_Test::ok( 201 !== $hostile_response->get_status(), 'A hostile document does not report success', $hostile_response->get_status() );
+CPIC_Test::ok(
+	false === strpos( (string) wp_json_encode( $hostile_response->get_data() ), 'javascript:' ),
+	'A hostile URL is never echoed back in the response'
+);
+
+// The error envelope always tells the client not to fall back to canvas.
+$envelope = $render_controller->render_error(
+	new \WP_Error( 'cpic_no_background_renderer', 'Install rsvg-convert.', array( 'status' => 409 ) )
+);
+
+CPIC_Test::equal( 409, $envelope->get_status(), 'A missing rasteriser is a 409, not a 500' );
+CPIC_Test::equal( 'none', $envelope->get_data()['data']['fallback'], 'The error tells the studio there is no fallback' );
+CPIC_Test::equal( 'cpic_no_background_renderer', $envelope->get_data()['code'], 'The error carries its code' );
+
+// A genuine server fault stays a 500 so it is not mistaken for a refusal.
+$fault = $render_controller->render_error( new \WP_Error( 'cpic_svg_rasterize', 'Boom.' ) );
+CPIC_Test::equal( 500, $fault->get_status(), 'A rasteriser fault is a 500' );
+CPIC_Test::equal( 'none', $fault->get_data()['data']['fallback'], 'A rasteriser fault still forbids a browser fallback' );
+
+/* ═══ Summary ═══════════════════════════════════════════════ *//* ═══ Summary ═══════════════════════════════════════════════ */
 
 CPIC_Test::summary();

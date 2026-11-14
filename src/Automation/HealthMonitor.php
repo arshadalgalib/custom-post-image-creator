@@ -120,7 +120,8 @@ final class HealthMonitor {
 	private function renderer() {
 		$registry = $this->container->get( 'renderers' );
 		$status   = $registry->status();
-		$preferred = (string) $this->container->get( 'settings' )->get( 'cpic_renderer', 'browser' );
+		$preferred = (string) $this->container->get( 'settings' )->get( 'cpic_renderer', '' );
+		$svg       = $registry->get( 'svg' );
 
 		$available = array();
 		foreach ( $status as $row ) {
@@ -134,10 +135,17 @@ final class HealthMonitor {
 			'preferred'          => $preferred,
 			'available'          => $available,
 			'renderers'          => $status,
-			// This is a capability fact, not a fault: the default configuration
-			// renders complex scripts in the browser and says so.
+			/*
+			 * The rasteriser is the single fact that decides whether this site
+			 * can publish at all, so it is reported by name rather than left
+			 * for the admin to infer from a failed publish.
+			 */
+			'svg_backend'        => $svg && $svg->is_available()
+				? ( method_exists( $svg, 'backend_name' ) ? (string) $svg->backend_name() : 'available' )
+				: '',
+			'svg_reason'         => $svg && ! $svg->is_available() ? $svg->unavailable_reason() : '',
 			'background_capable' => $registry->has_full_background_renderer(),
-			'complex_script_mode' => $registry->has_full_background_renderer() ? 'background' : 'browser-only',
+			'complex_script_mode' => $registry->has_full_background_renderer() ? 'background' : 'unavailable',
 		);
 	}
 
@@ -266,6 +274,7 @@ final class HealthMonitor {
 			'ok'              => true,
 			'gd'              => $gd,
 			'imagick'         => extension_loaded( 'imagick' ),
+			'exec'            => function_exists( 'exec' ) && ! in_array( 'exec', array_map( 'trim', explode( ',', (string) ini_get( 'disable_functions' ) ) ), true ),
 			'mbstring'        => function_exists( 'mb_strlen' ),
 			'openssl'         => extension_loaded( 'openssl' ),
 			'wp_cron_disabled' => defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON,
@@ -291,6 +300,20 @@ final class HealthMonitor {
 
 		if ( ! $report['renderer']['ok'] ) {
 			$problems[] = __( 'No renderer is available on this server.', 'custom-post-image-creator' );
+		}
+
+		/*
+		 * Images are now produced on the server, so a host without a shaping
+		 * rasteriser cannot publish at all. Saying "no renderer" would be
+		 * wrong — the GD renderer is present and cannot shape Bengali — so the
+		 * missing piece is named explicitly, with the fix.
+		 */
+		if ( empty( $report['renderer']['background_capable'] ) ) {
+			$problems[] = __( 'Images are rendered on the server, but this host has no rasteriser that can shape Bengali. Install librsvg (rsvg-convert), Inkscape, or ImageMagick with the librsvg delegate. Until then, publishing will stop with an explanation instead of producing a wrong image.', 'custom-post-image-creator' );
+		}
+
+		if ( empty( $report['environment']['exec'] ) && empty( $report['renderer']['background_capable'] ) ) {
+			$problems[] = __( 'PHP cannot start processes on this host (exec is disabled), so no external rasteriser can be used. Ask your host to allow exec, or switch to a host that does.', 'custom-post-image-creator' );
 		}
 
 		if ( ! $report['fonts']['ok'] ) {

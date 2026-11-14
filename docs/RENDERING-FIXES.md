@@ -424,6 +424,69 @@ Verified by reverting all three fixes together: the tests then print
 `Rendering failed | Rendering failed` — the screenshot above — and three checks
 fail.
 
+## Sixth pass — rendering moved to the server
+
+The studio used to paint the PNG on the canvas and POST the bytes to
+`/artifacts`. That made a hand-published image and a cron-published one two
+different code paths: one depended on somebody having the editor open, the other
+on a renderer that mostly did not exist. The product copy said so out loud
+("rendered in this browser first"), so this pass removes the browser from the
+rendering path entirely.
+
+Rendering is now: plan → SVG → PNG, on the host.
+
+- **`SvgPlanSerializer`** turns a plan into an SVG document. Text is emitted as
+  real `<text>`/`<tspan>`, never as positioned glyph runs, because the point of
+  the exercise is to hand shaping to the rasteriser's Pango/HarfBuzz.
+- **`SvgRenderer`** rasterises it with `rsvg-convert`, Inkscape, or ImageMagick
+  — and accepts ImageMagick *only* when `-list delegate` names `librsvg`. MSVG
+  has no HarfBuzz, so accepting it would silently reintroduce broken Bengali.
+- **`FontMetrics`** reads `hmtx`/`cmap` from the bundled TTFs so server-side
+  line breaking uses the same advance widths the editor measured.
+- **`POST /render/document`** is what the studio publishes through. Automations
+  already went through `RenderService::render()`, which builds the same plan
+  from the same document, so both paths produce one image.
+
+### Parity with the canvas painter
+
+A server render that reflowed differently from the editor would be a new bug
+class, so `fit_text()`/`wrap()`/`break_word()` are direct ports of the studio's
+`paintText()`: padding shrinks the box, `max_lines` truncates with an ellipsis,
+`auto_scale` grows into a box with room but never into an auto-height one,
+shrink stops at `min_font_size`, and an unbreakable run is broken by character.
+Each of these has an assertion whose numbers came from the canvas implementation.
+
+### Refusing instead of guessing
+
+There is no silent browser fallback. When no shaping rasteriser exists, the
+render fails with `cpic_no_background_renderer` and a message naming what to
+install; the studio shows that message and does not repaint locally. A forced
+`cpic/svg/backend` naming a tool that is not installed also fails — substituting
+a different rasteriser would change how Bengali is shaped without telling anyone.
+
+### Defects this pass found and fixed
+
+1. **`cpic_renderer` defaulted to `browser`.** `RendererRegistry::primary()`
+   honoured any *available* preferred renderer, and the browser always claims to
+   be available, so every automated render was handed to a renderer that cannot
+   run in cron. The default is now blank, an explicit preference only wins when
+   it can run in the background, and a regression test sets the preference to
+   `browser` and asserts it loses.
+2. **`FontMetrics` warned and returned nonsense for an unreadable font.** The
+   `default` advance key was read without checking it existed, so a missing file
+   produced "Undefined array key" warnings on every string. It now falls back to
+   the estimate.
+3. **`SvgRenderer::locate()` leaked PHP warnings.** `exec()` emits "Unable to
+   fork" as a warning when the host forbids process creation — *before* the
+   command runs — so capability detection sprayed warnings into whatever was
+   producing output. Detection is expected to fail quietly and now does.
+4. **An empty text layer still painted its background plate.** The canvas
+   returns before drawing anything, including the plate, so a server render had
+   a coloured bar the editor never showed. Both now draw nothing.
+5. **`height: 0` text layers were still treated as an overflow box** on the
+   canvas path but as unbounded on the server. Both treat zero height as "no
+   box", which is what makes an auto-height headline keep its authored size.
+
 ## Verification
 
 ```
@@ -431,15 +494,29 @@ cd tools/harness && node verify.mjs
 ```
 
 ```
-PHP test suite                     418 assertions, 0 failures
+PHP test suite                     514 assertions, 0 failures
 Admin screens (seeded)             ALL SCREENS RENDERED
 Admin screens (fresh install)      FRESH INSTALL SCREENS RENDERED
-Studio smoke (editor JS)           124 checks, 0 failures
+Studio smoke (editor JS)           135 checks, 0 failures
 Studio paint (editor canvas)       STUDIO PAINT PASSED
-Render doctor (every starter)      26 plans, 0 faults
+Render doctor (every starter)      50 plans, 0 faults
                                    RENDER DOCTOR PASSED
 ✓ ALL VERIFICATION GATES PASSED
 ```
+
+### Server rendering gates
+
+| Gate | What it proves |
+| --- | --- |
+| `FontMetrics` assertions | Advances come from `hmtx`/`cmap`, not a constant; a missing font falls back instead of warning |
+| Serializer assertions | Real `<text>`, escaped payloads, well-formed XML, z-order, rotation, shadow filters |
+| Layout-parity assertions | Wrap points, max-lines ellipsis, auto-scale grow/shrink, padding, min-size floor, vertical alignment |
+| Renderer assertions | Only shaping-capable backends are accepted; a forced-but-missing tool refuses instead of substituting |
+| Registry assertions | A saved `browser` preference never wins over a background renderer |
+| REST assertions | `/render/document` exists, receives a document, and returns `fallback: none` on every failure |
+| Studio smoke | Publishing POSTs a document to `/render/document` and uploads no browser-made PNG |
+
+Every one of these was confirmed to fail when its fix is reverted.
 
 ## Known, deliberate behaviour
 

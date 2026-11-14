@@ -58,9 +58,94 @@ final class RenderController extends BaseController {
 		);
 
 		$this->add(
+			'/document',
+			array(
+				'POST' => array(
+					'callback'   => array( $this, 'render_document' ),
+					'permission' => $this->requires( 'cpic_manage_templates' ),
+				),
+			)
+		);
+
+		$this->add(
 			'/status',
 			array( 'GET' => array( 'callback' => array( $this, 'status' ) ) )
 		);
+	}
+
+	/**
+	 * Render an unsaved studio document on the server.
+	 *
+	 * This is the path the studio publishes through, and it is deliberately the
+	 * same one automations take: the document is turned into a plan by the same
+	 * `render_plan` service and rasterised by the same renderer. A design
+	 * therefore produces one image, whether it was published by a person
+	 * clicking a button or by a cron job minutes later.
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 */
+	public function render_document( $request ) {
+		$document = $request->get_param( 'document' );
+
+		if ( ! is_array( $document ) || array() === $document ) {
+			return $this->fail( new \WP_Error( 'cpic_template_invalid', __( 'No design document was received.', 'custom-post-image-creator' ), array( 'status' => 400 ) ) );
+		}
+
+		$validated = $this->container->get( 'template_schema' )->validate( $document );
+
+		if ( ! $validated['ok'] ) {
+			return $this->fail( new \WP_Error( 'cpic_template_invalid', implode( ' ', $validated['errors'] ), array( 'status' => 400 ) ) );
+		}
+
+		$args = array(
+			'document'    => $validated['document'],
+			'format'      => $this->param( $request, 'format', 'square' ),
+			'post_id'     => $this->param_int( $request, 'post_id' ),
+			'template_id' => $this->param_int( $request, 'template_id' ),
+			'brand_id'    => $this->param_int( $request, 'brand_id' ),
+			'force'       => $this->param_bool( $request, 'force' ),
+			'attach'      => $this->param_bool( $request, 'attach' ),
+		);
+
+		$artifact = $this->container->get( 'render' )->render( (int) $args['post_id'], $args );
+
+		if ( is_wp_error( $artifact ) ) {
+			return $this->render_error( $artifact );
+		}
+
+		return $this->ok( $artifact, 201 );
+	}
+
+	/**
+	 * Turn a render failure into a response that names the actual fault.
+	 *
+	 * A missing rasteriser is the site owner's problem to fix and it is not the
+	 * design's fault, so it is reported with the install instructions attached
+	 * rather than as a generic rendering failure the user cannot act on.
+	 *
+	 * @param \WP_Error $error Error.
+	 * @return \WP_REST_Response
+	 */
+	public function render_error( $error ) {
+		$code        = $error->get_error_code();
+		$refusals    = array( 'cpic_no_background_renderer', 'cpic_complex_script', 'cpic_renderer_unavailable' );
+		$status      = in_array( $code, $refusals, true ) ? 409 : 500;
+
+		$data = array(
+			'code'    => $code,
+			'message' => $error->get_error_message(),
+			'data'    => (array) $error->get_error_data(),
+		);
+
+		/*
+		 * Tell the studio whether retrying in the browser would help. It never
+		 * would — the whole point of server rendering is that the browser is
+		 * not the renderer — so the client must not fall back to canvas.
+		 */
+		$data['data']['fallback'] = 'none';
+
+		return new \WP_REST_Response( $data, $status );
 	}
 
 	/**
@@ -124,21 +209,12 @@ final class RenderController extends BaseController {
 			array(
 				'format'      => $this->param( $request, 'format' ),
 				'force'       => $this->param_bool( $request, 'force' ),
-				'overrides'   => (array) $request->get_param( 'overrides' ),
-				'browser_only' => false,
+				'overrides' => (array) $request->get_param( 'overrides' ),
 			)
 		);
 
 		if ( is_wp_error( $result ) ) {
-			// A browser-only design is not an error the user caused; make that
-			// explicit so the studio knows to render client-side instead.
-			$data = array(
-				'code'    => $result->get_error_code(),
-				'message' => $result->get_error_message(),
-				'data'    => (array) $result->get_error_data(),
-			);
-
-			return new \WP_REST_Response( $data, in_array( $result->get_error_code(), array( 'cpic_browser_only', 'cpic_complex_script', 'cpic_no_background_renderer' ), true ) ? 409 : 500 );
+			return $this->render_error( $result );
 		}
 
 		return $this->ok( $result );

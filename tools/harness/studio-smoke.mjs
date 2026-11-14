@@ -303,6 +303,30 @@ window.fetch = async (url, options = {}) => {
 		return ok({ id: 77, url: 'https://example.test/render.png', width: 1080, height: 1080 });
 	}
 
+	// The studio no longer paints and uploads: it asks the server to render
+	// the document, so this is the endpoint a publish goes through.
+	if (target.includes('/render/document') && method === 'POST') {
+		if (publishOutcome === 'render-refused') {
+			const message = 'No server-side renderer is available, so the image cannot be produced here. Install librsvg (rsvg-convert), Inkscape, or ImageMagick with the librsvg delegate, then try again.';
+			return {
+				ok: false,
+				status: 409,
+				text: async () => JSON.stringify({ code: 'cpic_no_background_renderer', message, data: { status: 409, fallback: 'none' } }),
+				json: async () => ({ code: 'cpic_no_background_renderer', message, data: { status: 409, fallback: 'none' } }),
+			};
+		}
+
+		return ok({
+			id: 77,
+			file_url: 'https://example.test/render.png',
+			width: 1080,
+			height: 1080,
+			format: 'square',
+			bytes: 204800,
+			renderer: 'svg',
+		}, 201);
+	}
+
 	if (target.includes('/publishing/publish')) {
 		// Mirrors the real controller: 201 with a run and per-delivery results,
 		// which is *not* the same thing as "everything published".
@@ -907,6 +931,92 @@ check('no layer raised a paint error', !report || report.layers.every((row) => r
 
 const exportPng = await studio.export(state().document, { postId: 501, format: 'square' });
 check('export still returns a PNG after the report was added', typeof exportPng === 'string' && exportPng.startsWith('data:image/png'));
+
+console.log('\n▶ Rendering happens on the server');
+
+/*
+ * The studio used to paint a PNG in the browser and POST the bytes to
+ * `/artifacts`. That made a hand-published image and a cron-published one two
+ * different code paths that could disagree — and it meant a design could not
+ * be published at all unless someone had the editor open. Rendering now
+ * happens on the server, so the client must send a *document*, not pixels.
+ */
+// One real publish, driven the way a person does it: open the dialog, tick a
+// destination, press the primary button.
+if (q('#cpic-modal').hidden === false) {
+	const cancel = qa('#cpic-modal-foot button').pop();
+	if (cancel) {
+		click(cancel);
+		await sleep(120);
+	}
+}
+
+const publishButton = q('#cpic-publish');
+
+if (publishButton) {
+	click(publishButton);
+	await sleep(260);
+
+	if (q('#cpic-modal').hidden === false) {
+		qa('#cpic-modal-body input[type="checkbox"]').forEach((box) => {
+			box.checked = true;
+		});
+
+		const confirm = qa('#cpic-modal-foot button').pop();
+
+		if (confirm) {
+			click(confirm);
+			await sleep(500);
+		}
+	}
+}
+
+const documentRenders = requests.filter((r) => r.url.includes('/render/document'));
+const artifactUploads = requests.filter((r) => /\/artifacts\b/.test(r.url) && r.method === 'POST');
+
+check('publishing went through the server renderer', documentRenders.length > 0, documentRenders.length + ' request(s)');
+check('publishing uploaded no browser-made PNG', artifactUploads.length === 0, artifactUploads.length + ' upload(s)');
+check(
+	'the server render carries the design document, not pixels',
+	documentRenders.every((r) => {
+		const body = r.body || {};
+		return !!body.document && !body.binary && !body.data;
+	}),
+	JSON.stringify(Object.keys((documentRenders[0] && documentRenders[0].body) || {}))
+);
+check(
+	'the server render names the post it is for',
+	documentRenders.some((r) => (r.body || {}).post_id === 501),
+	String((documentRenders[0] && documentRenders[0].body && documentRenders[0].body.post_id) || 'none')
+);
+
+// A stored artifact comes back with a URL the studio can show.
+const storedArtifact = await studio.storeArtifact({ postId: 501, format: 'square', attach: false });
+check('a server render returns a stored artifact', !!storedArtifact && !!storedArtifact.artifact && storedArtifact.artifact.id === 77);
+check('the stored artifact has a displayable URL', !!(storedArtifact && storedArtifact.artifact && storedArtifact.artifact.file_url));
+check('a server render hands back no local PNG', !!storedArtifact && storedArtifact.png === null);
+
+// When the server cannot shape, the refusal is a real error, not a blank image.
+publishOutcome = 'render-refused';
+
+const refusedRender = await studio.storeArtifact({ postId: 501, format: 'square' })
+	.then(() => null)
+	.catch((error) => error);
+
+publishOutcome = 'ok';
+
+check('a server that cannot render rejects instead of resolving', !!refusedRender, refusedRender ? refusedRender.message : 'resolved');
+check('the refusal names the render step that failed', !!refusedRender && refusedRender.storeStage === 'render', refusedRender && refusedRender.storeStage);
+check(
+	'the refusal says what the server is missing',
+	/rasteris|rsvg|inkscape|librsvg|renderer is available/i.test(String((refusedRender && refusedRender.message) || '')),
+	String((refusedRender && refusedRender.message) || '').slice(0, 120)
+);
+check(
+	'a server refusal never pretends to be a generic rendering failure',
+	!/^\s*Rendering failed\s*$/.test(String((refusedRender && refusedRender.message) || '')),
+	String((refusedRender && refusedRender.message) || '').slice(0, 120)
+);
 
 
 console.log('\n▶ Menus and dialogs');

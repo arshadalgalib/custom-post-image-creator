@@ -267,8 +267,10 @@ final class Admin {
 			'sessionExpired' => __( 'WordPress refused the request. Your session may have expired — reload the page and try again.', 'custom-post-image-creator' ),
 			'serverError'   => __( 'The server returned an error page instead of a response. Check the debug log; a PHP error usually explains this.', 'custom-post-image-creator' ),
 			'imageTooLarge' => __( 'The image is too large for this server to accept. Ask your host to raise the upload limit, or pick a smaller format.', 'custom-post-image-creator' ),
-			'stageRender'   => __( '(while drawing the image)', 'custom-post-image-creator' ),
+			'stageRender'   => __( '(while rendering the image on the server)', 'custom-post-image-creator' ),
+			'stageStore'    => __( '(while storing the image on the server)', 'custom-post-image-creator' ),
 			'stageUpload'   => __( '(while storing the image on the server)', 'custom-post-image-creator' ),
+			'noArtifact'    => __( 'The server did not return a stored image. Reload the page and try again.', 'custom-post-image-creator' ),
 			'publishFailed' => __( 'Publishing failed', 'custom-post-image-creator' ),
 		);
 	}
