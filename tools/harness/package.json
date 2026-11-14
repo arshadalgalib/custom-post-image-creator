@@ -1,0 +1,17 @@
+{
+  "name": "cpic-verification-harness",
+  "private": true,
+  "type": "module",
+  "description": "Development-only verification harness: runs the plugin's real PHP in php-wasm against SQLite, so the suite executes on machines without a PHP binary. Never shipped in the plugin ZIP.",
+  "scripts": {
+    "test": "node run-php-tests.mjs ../../"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.1.0",
+    "php-wasm": "^0.2.0",
+    "php-wasm-mbstring": "^0.2.0",
+    "php-wasm-openssl": "^0.2.0",
+    "php-wasm-sqlite": "^0.2.0",
+    "php-wasm-zlib": "^0.2.0"
+  }
+}
