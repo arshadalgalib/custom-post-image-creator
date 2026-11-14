@@ -291,6 +291,20 @@ window.fetch = async (url, options = {}) => {
 			return ok({ run_id: 6, post_id: body.post_id, deliveries: [], results: [], waiting_render: false });
 		}
 
+		// The browser-only host: the run is accepted and parked until the image
+		// the studio just uploaded is picked up. This must read as "saved", not
+		// as Published and not as an error.
+		if (publishOutcome === 'waiting') {
+			return ok({
+				run_id: 7,
+				post_id: body.post_id,
+				deliveries: ids.map((id, index) => ({ delivery_id: 30 + index, status: 'waiting_for_artifact', destination_id: id })),
+				results: ids.map((id, index) => ({ delivery_id: 30 + index, status: 'waiting_for_artifact', provider: 'facebook', destination_id: id })),
+				waiting_render: true,
+				render_error: 'cpic_no_background_renderer',
+			});
+		}
+
 		return ok({
 			run_id: 4,
 			post_id: body.post_id,
@@ -1078,6 +1092,14 @@ if (opened) {
 	const afterNone = await runPublish('none');
 	check('publishing with no destination does not claim Published', !/Published/.test(afterNone), afterNone.slice(0, 120));
 	check('publishing with no destination says the image was saved', /saved/i.test(afterNone), afterNone.slice(0, 120));
+
+	// A browser-only host parks the run until the image it just uploaded is
+	// picked up. That is a success to report honestly, never "Published" and
+	// never "Rendering failed" — the exact confusion that started all this.
+	const afterWaiting = await runPublish('waiting');
+	check('a parked publish does not claim Published', !/Published/i.test(afterWaiting), afterWaiting.slice(0, 140));
+	check('a parked publish is not reported as a failure', !/Rendering failed|Publishing failed|TypeError/i.test(afterWaiting), afterWaiting.slice(0, 140));
+	check('a parked publish says the image is saved for publishing', /saved|ready|queue/i.test(afterWaiting), afterWaiting.slice(0, 140));
 
 	publishOutcome = 'ok';
 

@@ -255,6 +255,15 @@ either: scheduled work lives in `deliveries`, the queue table holds `publish`
 jobs, and only `process_due()` bridges them. The queue cron hook now drains due
 deliveries first.
 
+### A parked run was reported as Published
+
+The publish dialog counted *deliveries* as success. A browser-only host returns
+`waiting_for_artifact` rows — the run was accepted, nothing has left the site —
+and the dialog said "Published — N destination(s)" with a success toast. Only a
+row the provider confirmed is counted now; parked rows say the image is saved
+for publishing. This is the same class of lie as the original "Rendering
+failed": the UI promising something the server never claimed.
+
 ### "Saved for publishing." was a dead end
 
 When the renderer is browser-only (no GD, no headless Chromium — the normal
@@ -308,7 +317,7 @@ cd tools/harness && node verify.mjs
 PHP test suite                     366 assertions, 0 failures
 Admin screens (seeded)             ALL SCREENS RENDERED
 Admin screens (fresh install)      FRESH INSTALL SCREENS RENDERED
-Studio smoke (editor JS)           117 checks, 0 failures
+Studio smoke (editor JS)           120 checks, 0 failures
 Studio paint (editor canvas)       STUDIO PAINT PASSED
 Render doctor (every starter)      26 plans, 0 faults
                                    RENDER DOCTOR PASSED

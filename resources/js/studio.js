@@ -7750,6 +7750,13 @@
 								return row && row.status === 'waiting_for_artifact';
 							} );
 
+							// Only a delivery the provider confirmed may be called
+							// published. A parked row is a queued row: the run was
+							// accepted, but nothing has left the site yet.
+							var published = outcomes.filter( function ( row ) {
+								return row && row.status === 'published';
+							} );
+
 							clear( progress );
 
 							if ( failed.length ) {
@@ -7761,11 +7768,11 @@
 								return;
 							}
 
-							if ( outcomes.length ) {
+							if ( published.length ) {
 								progress.appendChild( iconNode( 'check', 16 ) );
 								progress.appendChild(
 									el( 'span', {
-										text: str( 'published', 'Published' ) + ' — ' + outcomes.length + ' ' + str( 'destinations', 'destination(s)' ),
+										text: str( 'published', 'Published' ) + ' — ' + published.length + ' ' + str( 'destinations', 'destination(s)' ),
 									} )
 								);
 								toast( str( 'published', 'Published' ), 'success' );
