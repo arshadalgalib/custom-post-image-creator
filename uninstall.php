@@ -70,8 +70,17 @@ foreach ( array( 'cpic_last_shared_to_facebook', 'cpic_last_shared_to_telegram',
 	delete_post_meta_by_key( $cpic_meta );
 }
 
-// Scheduled events (both generations of hook names).
+/*
+ * Scheduled events — every generation of hook name.
+ *
+ * The current names are namespaced (`cpic/cron/...`). Clearing only the 6.x
+ * and 7.0 names left three live cron events pointing at a plugin that no
+ * longer exists, which WordPress keeps firing into the void forever.
+ */
 $cpic_hooks = array(
+	'cpic/cron/queue',
+	'cpic/cron/heartbeat',
+	'cpic/cron/cleanup',
 	'cpic_cron_process_queue',
 	'cpic_cron_process_jobs',
 	'cpic_run_queue',

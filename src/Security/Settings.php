@@ -301,6 +301,17 @@ final class Settings {
 				continue;
 			}
 
+			/*
+			 * A number field that cannot be read must be reported, not
+			 * silently coerced. Saving 0 for "abc" turned Batch Size and Time
+			 * Budget off without telling anyone, and a 0 batch size stops the
+			 * queue entirely.
+			 */
+			if ( in_array( $defs[ $key ]['type'], array( 'int', 'float' ), true ) && ! is_numeric( $value ) ) {
+				$errors[ $key ] = __( 'That value must be a number.', 'custom-post-image-creator' );
+				continue;
+			}
+
 			$clean = $this->sanitize( $defs[ $key ]['type'], $value );
 
 			if ( 'secret' === $defs[ $key ]['type'] && '' === $clean && '' !== (string) $value ) {

@@ -82,6 +82,23 @@ CPIC_Test::ok( in_array( 'cpic_not_a_real', $bulk['skipped'], true ), 'Unknown k
 $export = $settings->export();
 CPIC_Test::ok( ! isset( $export['settings']['cpic_fb_page_token'] ), 'Settings export excludes secrets' );
 
+/*
+ * A number field typed as "abc" used to be stored as 0 without complaint.
+ * Batch Size 0 stops the queue dead and Time Budget 0 was interpreted as
+ * "5 seconds", both silently. Unreadable numbers are now reported instead.
+ */
+$bad_number = $settings->bulk_set(
+	array(
+		'cpic_batch_size'   => 'abc',
+		'cpic_time_budget'  => 'twenty',
+		'cpic_max_retries'  => '4',
+	)
+);
+CPIC_Test::equal( 1, $bad_number['updated'], 'Only the readable number is written' );
+CPIC_Test::equal( 5, $settings->int( 'cpic_batch_size' ), 'An unreadable number never overwrites the stored value' );
+CPIC_Test::ok( isset( $bad_number['errors']['cpic_batch_size'] ), 'An unreadable number is reported to the form' );
+CPIC_Test::equal( 4, $settings->int( 'cpic_max_retries' ), 'Valid numbers still save' );
+
 /* ═══ 4. Schema + migration ═════════════════════════════════════ */
 
 CPIC_Test::suite( 'Database: schema and migration' );
@@ -512,6 +529,25 @@ $uninstall_source = (string) file_get_contents( CPIC_PLUGIN_DIR . 'uninstall.php
 CPIC_Test::ok( false !== strpos( $uninstall_source, 'cpic_cleanup_on_uninstall' ), 'Uninstall is opt-in for destructive cleanup' );
 CPIC_Test::ok( false !== strpos( $uninstall_source, 'option_keys()' ), 'Uninstall reads option keys from the schema' );
 CPIC_Test::ok( false !== strpos( $uninstall_source, "defined( 'WP_UNINSTALL_PLUGIN' )" ), 'Uninstall refuses to run outside the uninstall request' );
+
+/*
+ * Cron events outlive the plugin. Every hook name the scheduler ever used must
+ * be cleared, or WordPress keeps firing events at classes that are gone.
+ */
+$scheduler_source = (string) file_get_contents( CPIC_PLUGIN_DIR . 'src/Automation/Scheduler.php' );
+preg_match_all( "/HOOK_[A-Z]+\s*=\s*'([^']+)'/", $scheduler_source, $hook_matches );
+$declared_hooks = isset( $hook_matches[1] ) ? $hook_matches[1] : array();
+
+CPIC_Test::ok( count( $declared_hooks ) >= 3, 'The scheduler declares its cron hooks', count( $declared_hooks ) );
+
+$missing_hooks = array();
+foreach ( $declared_hooks as $declared_hook ) {
+	if ( false === strpos( $uninstall_source, "'" . $declared_hook . "'" ) ) {
+		$missing_hooks[] = $declared_hook;
+	}
+}
+
+CPIC_Test::equal( array(), $missing_hooks, 'Uninstall clears every scheduled hook' );
 
 /* ═══ 8d. Autoload integrity ═══════════════════════════════════ */
 
